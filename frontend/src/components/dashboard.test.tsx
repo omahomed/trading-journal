@@ -43,6 +43,10 @@ vi.mock("@/lib/api", () => ({
       portfolio: "CanSlim", total_market_value: 0,
       positions: [], sectors: [], themes: [], unclassified: [],
     }),
+    // Migration 068 — riskLevels feeds the DRAWDOWN tile. Default to null
+    // (no active cycle) so existing tests fall back to the ATH-only
+    // rendering they've always asserted on; opt-in per-test as needed.
+    riskLevels: vi.fn().mockResolvedValue(null),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -168,7 +172,9 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     // Old code would show 0% (since history.max of empty is -Infinity).
     // New code shows the metrics value verbatim.
     expect(await screen.findByText("-7.42%")).toBeInTheDocument();
-    expect(screen.getByText(/from peak \$525,000/)).toBeInTheDocument();
+    // Post-migration-068 tile fallback copy (capital F). ATH-only mode
+    // fires when riskLevels returns null (the test's default mock).
+    expect(screen.getByText(/From peak \$525,000/)).toBeInTheDocument();
   });
 
   test("Live Exposure tile renders metrics.exposure_pct from journal, not from live prices", async () => {

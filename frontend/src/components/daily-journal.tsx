@@ -526,9 +526,22 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
   const daySells = details.filter(d => String(d.date).slice(0, 10) === selectedDate && String(d.action).toUpperCase() === "SELL");
   const dayClosed = closedTrades.filter(t => String(t.closed_date).slice(0, 10) === selectedDate);
 
-  // Risk status
-  const riskMsg = ddPct >= -7.5 ? "GREEN LIGHT" : ddPct >= -12.5 ? "CAUTION" : ddPct >= -15 ? "MAX 30% INVESTED" : "GO TO CASH";
-  const riskColor = ddPct >= -7.5 ? "#08a86b" : ddPct >= -12.5 ? "#f59f00" : "#e5484d";
+  // Risk status — ATH-drawdown magnitude descriptor for this historical
+  // day. Migration 068 replaced the actionable "REMOVE MARGIN / GO TO
+  // CASH" copy (which anchored to ATH DD) with severity labels because
+  // the new L-series governor is cycle-anchored + IXIC-structural, not
+  // ATH-driven. Historical days don't have a per-day cycle_reference
+  // snapshot, so the honest signal to render here is the DD magnitude,
+  // not an inferred L-series bucket. Live risk state lives on the Risk
+  // Manager page.
+  const riskMsg = ddPct >= -7.5 ? "CLEAR"
+                : ddPct >= -12.5 ? "MODERATE DD"
+                : ddPct >= -15 ? "DEEP DD"
+                : "CRITICAL DD";
+  const riskColor = ddPct >= -7.5 ? "#08a86b"
+                  : ddPct >= -12.5 ? "#f59f00"
+                  : ddPct >= -15 ? "#f97316"
+                  : "#e5484d";
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
 

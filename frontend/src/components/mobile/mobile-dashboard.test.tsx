@@ -31,6 +31,9 @@ vi.mock("@/lib/api", () => ({
     journalLatest: vi.fn(),
     tradesOpen: vi.fn(),
     tradesClosed: vi.fn(),
+    // Migration 068 — cycle-anchored DD for the Drawdown tile. Default
+    // null so existing tests keep asserting on the ATH fallback copy.
+    riskLevels: vi.fn().mockResolvedValue(null),
   },
   getActivePortfolio: vi.fn(() => "CanSlim"),
 }));

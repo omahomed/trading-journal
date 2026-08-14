@@ -1,5 +1,9 @@
 import { describe, test, expect } from "vitest";
-import { classifyDeck, HARD_DECKS, DECK_META } from "./deck-levels";
+import {
+  classifyDeck, HARD_DECKS, DECK_META,
+  L_SERIES, L_SERIES_META, LEGACY_HARD_DECKS, LEGACY_DECK_META,
+  classifyLegacyDeck,
+} from "./deck-levels";
 
 describe("classifyDeck", () => {
   test("null / undefined / NaN → L0 (defensive)", () => {
@@ -57,5 +61,53 @@ describe("HARD_DECKS constants", () => {
       expect(m.sub).toBeTruthy();
       expect(m.color).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+});
+
+// ── Migration 068 — L-series (new) ────────────────────────────────
+describe("L_SERIES — new cycle-anchored + IXIC-structural levels", () => {
+  test("four levels, ordered shallow → deep, caps 80/60/40/20", () => {
+    // Locked. Caps come from the doctrine — Risk Manager renders each
+    // level's cap % in the pill; changes here without a doctrine change
+    // silently shift the exposure governor.
+    expect(L_SERIES.map(l => l.key)).toEqual(["L1", "L2", "L3", "L4"]);
+    expect(L_SERIES.map(l => l.cap_pct)).toEqual([80, 60, 40, 20]);
+  });
+
+  test("every level has an action + trigger string", () => {
+    for (const lvl of L_SERIES) {
+      expect(lvl.action).toBeTruthy();
+      expect(lvl.trigger).toBeTruthy();
+      expect(lvl.color).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+
+  test("L_SERIES_META covers every level (incl. L0 and new L4)", () => {
+    for (const lvl of ["L0", "L1", "L2", "L3", "L4"] as const) {
+      const m = L_SERIES_META[lvl];
+      expect(m.label).toBeTruthy();
+      expect(m.sub).toBeTruthy();
+      expect(m.color).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+});
+
+describe("Legacy exports stay wired for the Analytics scorecard", () => {
+  test("HARD_DECKS is the legacy 3-level shape (7.5 / 12.5 / 15)", () => {
+    expect(HARD_DECKS).toBe(LEGACY_HARD_DECKS);
+    expect(HARD_DECKS.map(d => d.pct)).toEqual([7.5, 12.5, 15.0]);
+  });
+
+  test("DECK_META still renders the legacy 'Remove Margin / Go To Cash' copy", () => {
+    // Command Center consumes DECK_META keyed off the ATH-drawdown
+    // classifier and still expects the old actionable copy while the
+    // ATH classifier stands. Migration 068 didn't rework Command Center.
+    expect(DECK_META).toBe(LEGACY_DECK_META);
+    expect(DECK_META.L1.sub).toBe("Remove Margin");
+    expect(DECK_META.L3.sub).toBe("Go To Cash");
+  });
+
+  test("classifyDeck is the legacy classifier", () => {
+    expect(classifyDeck).toBe(classifyLegacyDeck);
   });
 });

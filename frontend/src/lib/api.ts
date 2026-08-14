@@ -1707,6 +1707,15 @@ export const api = {
   commandCenter: () =>
     fetchJSON<{ rows: CommandCenterRow[] } | { error: string }>(`/api/command-center`),
 
+  // Risk Manager L-series read view (migration 068 + Exit Ladder reuse).
+  // Backend composes: cycle_reference anchor for L1, MCT engine state
+  // for L2/L3/L4, and dashboard_metrics for NLV/exposure/ATH. See
+  // GET /api/risk/levels in api/main.py for the response contract.
+  riskLevels: (portfolio = getActivePortfolio()) =>
+    fetchJSON<RiskLevelsResponse | { error: string }>(
+      `/api/risk/levels?portfolio=${encodeURIComponent(portfolio)}`,
+    ),
+
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
@@ -2286,4 +2295,48 @@ export interface CommandCenterRow {
   drawdown_current_pct: number | null;
   drawdown_peak_nlv: number | null;
   drawdown_peak_date: string | null;
+}
+
+// Risk Manager L-series (migration 068 + Exit Ladder reuse). Composed by
+// GET /api/risk/levels. The endpoint is the single source of truth for
+// which L (L1..L4) is currently active and what cap % applies.
+export type RiskLevelKey = "L1" | "L2" | "L3" | "L4";
+export type RiskLevelStatus = "CLEAR" | "ARMED" | "FIRED";
+
+export interface RiskLevelState {
+  key: RiskLevelKey;
+  cap_pct: number;             // 80 / 60 / 40 / 20
+  action: string;              // "Off margin", "Cap 60% gross", etc.
+  trigger: string;             // Human-readable trigger description
+  status: RiskLevelStatus;
+  detail: string;              // Current state detail (e.g. "1 close below 21 EMA")
+  threshold_nlv?: number | null;  // L1 only — the $ threshold below which it fires
+}
+
+export interface CycleReferenceRow {
+  id: number;
+  portfolio_id: number;
+  flip_date: string;                 // ISO date
+  initial_nlv: number;
+  ratcheted_nlv: number;
+  ratcheted_on_date: string;         // ISO date
+  is_frozen: boolean;
+  frozen_at_date: string | null;
+  l1_threshold_nlv: number | null;   // ratcheted_nlv × 0.925
+}
+
+export interface RiskLevelsResponse {
+  portfolio: string;
+  cycle_reference: CycleReferenceRow | null;
+  current_nlv: number;
+  current_exposure_pct: number;
+  current_gross_holdings: number;
+  current_drawdown_from_cycle_pct: number;    // negative or 0
+  ath_hwm: number;
+  ath_drawdown_pct: number;                    // negative or 0
+  m_factor_suggested_exposure_pct: number | null;
+  levels_state: RiskLevelState[];
+  active_level: RiskLevelKey | null;
+  effective_cap_pct: number | null;
+  excess_dollars_to_sell: number;
 }

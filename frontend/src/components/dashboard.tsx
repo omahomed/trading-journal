@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail, type ConcentrationResponse } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail, type ConcentrationResponse, type RiskLevelsResponse } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
@@ -80,6 +80,11 @@ export function Dashboard({ navColor }: { navColor: string }) {
   // Fetched alongside the rest so a single dashboard refresh updates all panels.
   // Silent on error — the card just renders empty state.
   const [concentration, setConcentration] = useState<ConcentrationResponse | null>(null);
+  // Migration 068 — Risk L-series composed read view. Drives the DRAWDOWN
+  // tile's primary number (cycle-reference DD instead of ATH DD). ATH
+  // stays as a subline for historical context. Silent on error — tile
+  // falls back to the old ATH-only rendering.
+  const [risk, setRisk] = useState<RiskLevelsResponse | null>(null);
 
   // Throttle + in-flight guards so the visibility/focus listener below
   // can't fire a 7-endpoint refetch storm on every window-focus event.
@@ -96,7 +101,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
     inFlightRef.current = true;
     try {
       const activeId = activePortfolio?.id;
-      const [lat, hist, open, closed, ev, dash, recent, conc] = await Promise.all([
+      const [lat, hist, open, closed, ev, dash, recent, conc, riskRes] = await Promise.all([
         api.journalLatest().catch((err) => { log.error("dashboard", "journal latest fetch failed", err); return null; }),
         api.journalHistory(getActivePortfolio(), 0).catch((err) => { log.error("dashboard", "journal history fetch failed", err); return []; }),
         api.tradesOpen().catch((err) => { log.error("dashboard", "open trades fetch failed", err); return []; }),
@@ -107,6 +112,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
           : Promise.resolve(null),
         api.tradesRecent(getActivePortfolio(), 2000).catch((err) => { log.error("dashboard", "recent trades fetch failed", err); return { details: [], lot_closures: [] }; }),
         api.concentration(getActivePortfolio()).catch((err) => { log.error("dashboard", "concentration fetch failed", err); return null; }),
+        api.riskLevels(getActivePortfolio()).catch((err) => { log.error("dashboard", "risk levels fetch failed", err); return null; }),
       ]);
       // Guard: backend can return {error: "..."} at HTTP 200 when something
       // goes wrong server-side. Don't let that poison the render.
@@ -122,6 +128,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       setAllDetails((recent && (recent as any).details) || []);
       setEvents(Array.isArray(ev) ? ev : []);
       setConcentration(conc && !("error" in (conc as any)) ? conc as ConcentrationResponse : null);
+      setRisk(riskRes && typeof riskRes === "object" && !("error" in (riskRes as any)) ? (riskRes as RiskLevelsResponse) : null);
       setLoading(false);
       lastFetchAtRef.current = Date.now();
     } finally {
@@ -329,13 +336,25 @@ export function Dashboard({ navColor }: { navColor: string }) {
       gradient: "linear-gradient(135deg, #f97316, #fb923c)",
     },
     {
+      // Migration 068 — DRAWDOWN tile now anchors to the cycle_reference
+      // (post-flip ratchet), not the all-time HWM. ATH DD stays as a
+      // subline for historical context so the operator can still see how
+      // far below the all-time peak they are. Falls back to ATH-only if
+      // /api/risk/levels didn't load (silent-degradation vs. blocking).
       label: "DRAWDOWN",
-      value: journalAvailable ? `${ddPct.toFixed(2)}%` : "—",
+      value: !journalAvailable
+        ? "—"
+        : (risk?.cycle_reference != null
+            ? `${(risk?.current_drawdown_from_cycle_pct ?? 0).toFixed(2)}%`
+            : `${ddPct.toFixed(2)}%`),
       sub: !journalAvailable
         ? "Save your first daily routine"
-        : ddPct >= -0.01
-          ? "Clear"
-          : `from peak ${formatCurrency(peakNlv, { decimals: 0 })}`,
+        : (risk?.cycle_reference != null
+            ? `From cycle ref ${formatCurrency(Number(risk.cycle_reference.ratcheted_nlv), { decimals: 0 })}`
+            : (ddPct >= -0.01 ? "Clear" : `From peak ${formatCurrency(peakNlv, { decimals: 0 })}`)),
+      extraSub: risk?.cycle_reference != null && peakNlv > 0
+        ? `ATH: ${ddPct.toFixed(2)}%`
+        : undefined,
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
   ];

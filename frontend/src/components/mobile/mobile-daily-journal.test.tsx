@@ -323,11 +323,14 @@ describe("MobileDailyJournal — drawdown", () => {
     expect(pct).toHaveTextContent(/-5\.00%/);
   });
 
+  // Post-migration-068 severity labels — replaced the old actionable
+  // "REMOVE MARGIN / GO TO CASH" copy (ATH-anchored) with DD magnitude
+  // descriptors. Live L-series actions live on Risk Manager.
   test.each([
-    [-5, "GREEN LIGHT", "var(--m-accent)"],
-    [-10, "CAUTION", "var(--m-warn)"],
-    [-13, "MAX 30% INVESTED", "var(--m-down)"],
-    [-20, "GO TO CASH", "var(--m-down)"],
+    [-5,  "CLEAR",        "var(--m-accent)"],
+    [-10, "MODERATE DD",  "var(--m-warn)"],
+    [-13, "DEEP DD",      "var(--m-down)"],
+    [-20, "CRITICAL DD",  "var(--m-down)"],
   ])("drawdown %s%% → %s tier", async (pct, message) => {
     // Peak 100, current = peak * (1 + pct/100).
     const peak = 500_000;

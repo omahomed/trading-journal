@@ -8,6 +8,7 @@ import {
   type DashboardMetrics,
   type JournalEntry,
   type JournalHistoryPoint,
+  type RiskLevelsResponse,
   type TradePosition,
 } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
@@ -61,6 +62,7 @@ export function MobileDashboard() {
   const [latest, setLatest] = useState<JournalEntry | null>(null);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
+  const [risk, setRisk] = useState<RiskLevelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [ecRange, setEcRange] = useState<ECRange>("6M");
 
@@ -74,7 +76,7 @@ export function MobileDashboard() {
     inFlightRef.current = true;
     try {
       const activeId = activePortfolio?.id;
-      const [dash, hist, lat, open, closed] = await Promise.all([
+      const [dash, hist, lat, open, closed, riskRes] = await Promise.all([
         activeId != null
           ? api.dashboardMetrics(activeId).catch((err) => {
               log.error("mobile-dashboard", "metrics fetch failed", err);
@@ -97,6 +99,12 @@ export function MobileDashboard() {
           log.error("mobile-dashboard", "closed trades fetch failed", err);
           return [];
         }),
+        // Migration 068 — cycle-anchored DD for the Drawdown tile. Silent
+        // on error; tile falls back to ATH-only rendering.
+        api.riskLevels(getActivePortfolio()).catch((err) => {
+          log.error("mobile-dashboard", "risk levels fetch failed", err);
+          return null;
+        }),
       ]);
       const safeMetrics =
         dash && typeof dash === "object" && !("error" in dash)
@@ -107,6 +115,11 @@ export function MobileDashboard() {
       setLatest(lat as JournalEntry | null);
       setOpenTrades(Array.isArray(open) ? (open as TradePosition[]) : []);
       setClosedTrades(Array.isArray(closed) ? (closed as TradePosition[]) : []);
+      setRisk(
+        riskRes && typeof riskRes === "object" && !("error" in riskRes)
+          ? (riskRes as RiskLevelsResponse)
+          : null,
+      );
       setLoading(false);
       lastFetchAtRef.current = Date.now();
     } finally {
@@ -146,6 +159,12 @@ export function MobileDashboard() {
         suggestedExposurePct={
           latest?.suggested_exposure_pct != null
             ? Number(latest.suggested_exposure_pct)
+            : null
+        }
+        cycleDdPct={risk?.current_drawdown_from_cycle_pct ?? null}
+        cycleRefNlv={
+          risk?.cycle_reference?.ratcheted_nlv != null
+            ? Number(risk.cycle_reference.ratcheted_nlv)
             : null
         }
       />
@@ -224,12 +243,16 @@ function KpiGrid({
   openCount,
   portfolioHeat,
   suggestedExposurePct,
+  cycleDdPct,
+  cycleRefNlv,
 }: {
   metrics: DashboardMetrics | null;
   history: JournalHistoryPoint[];
   openCount: number;
   portfolioHeat: number;
   suggestedExposurePct: number | null;
+  cycleDdPct: number | null;
+  cycleRefNlv: number | null;
 }) {
   const journalAvailable = metrics?.journal_available ?? false;
   const ltdPct = metrics?.ltd_pct ?? null;
@@ -300,16 +323,38 @@ function KpiGrid({
         }
       />
       <KpiCard
+        // Migration 068 — Drawdown is anchored to the cycle_reference
+        // (post-flip ratchet) when available. ATH DD stays as a second
+        // subline for historical context. Falls back to ATH-only when
+        // /api/risk/levels didn't load.
         label="Drawdown"
-        value={journalAvailable && ddPct != null ? `${ddPct.toFixed(2)}%` : "—"}
+        value={
+          !journalAvailable
+            ? "—"
+            : cycleRefNlv != null && cycleDdPct != null
+              ? `${cycleDdPct.toFixed(2)}%`
+              : ddPct != null
+                ? `${ddPct.toFixed(2)}%`
+                : "—"
+        }
         valueTone="text"
+        subLines={
+          journalAvailable && cycleRefNlv != null && cycleDdPct != null
+            ? [
+                `Cycle ref ${formatCurrency(cycleRefNlv, { decimals: 0 })}`,
+                ...(ddPct != null && Math.abs(ddPct) >= 0.01
+                  ? [`ATH ${ddPct.toFixed(2)}%`]
+                  : []),
+              ]
+            : undefined
+        }
         sub={
-          journalAvailable && ddPct != null && Math.abs(ddPct) >= 0.01 && peakNlv != null
+          journalAvailable && cycleRefNlv == null && ddPct != null && Math.abs(ddPct) >= 0.01 && peakNlv != null
             ? `peak ${formatCurrency(peakNlv, { decimals: 0 })}`
             : undefined
         }
         tag={
-          journalAvailable && ddPct != null && Math.abs(ddPct) < 0.01
+          journalAvailable && ddPct != null && Math.abs(ddPct) < 0.01 && cycleRefNlv == null
             ? { label: "Clear", tone: "accent" }
             : undefined
         }

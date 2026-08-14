@@ -8508,3 +8508,202 @@ def list_open_tickers_for_portfolio(portfolio_id: int) -> list[str]:
                 (portfolio_id,),
             )
             return [r[0] for r in cur.fetchall() if r[0]]
+
+
+# ── cycle_references (migration 068) ─────────────────────────────────────────
+# Per-cycle NLV anchor for the L1 exposure level. Ratcheted on new NLV highs
+# inside a positive trend cycle, frozen when the trend flips negative. See
+# migrations/068_cycle_references.sql for the schema + tenancy model.
+
+def _cycle_ref_row_dict(r) -> dict:
+    return {
+        "id": r["id"],
+        "portfolio_id": r["portfolio_id"],
+        "flip_date": r["flip_date"].isoformat() if r["flip_date"] else None,
+        "initial_nlv": float(r["initial_nlv"]),
+        "ratcheted_nlv": float(r["ratcheted_nlv"]),
+        "ratcheted_on_date": (
+            r["ratcheted_on_date"].isoformat() if r["ratcheted_on_date"] else None
+        ),
+        "is_frozen": bool(r["is_frozen"]),
+        "frozen_at_date": (
+            r["frozen_at_date"].isoformat() if r["frozen_at_date"] else None
+        ),
+    }
+
+
+def load_active_cycle_reference(portfolio_name: str) -> dict | None:
+    """Latest non-frozen cycle_reference row for (user, portfolio) — or None.
+    There is at most one active row per (user, portfolio); if multiple exist
+    (data-corruption case) the most recent flip_date wins."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT cr.id, cr.portfolio_id, cr.flip_date, cr.initial_nlv,
+                       cr.ratcheted_nlv, cr.ratcheted_on_date,
+                       cr.is_frozen, cr.frozen_at_date
+                  FROM cycle_references cr
+                  JOIN portfolios p ON p.id = cr.portfolio_id
+                 WHERE p.name = %s AND cr.is_frozen = FALSE
+                 ORDER BY cr.flip_date DESC
+                 LIMIT 1
+                """,
+                (portfolio_name,),
+            )
+            row = cur.fetchone()
+            return _cycle_ref_row_dict(row) if row else None
+
+
+def list_cycle_references(portfolio_name: str, limit: int = 20) -> list[dict]:
+    """All cycle_references for (user, portfolio), most-recent first.
+    Used by the Risk Manager's history strip (frozen + active)."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT cr.id, cr.portfolio_id, cr.flip_date, cr.initial_nlv,
+                       cr.ratcheted_nlv, cr.ratcheted_on_date,
+                       cr.is_frozen, cr.frozen_at_date
+                  FROM cycle_references cr
+                  JOIN portfolios p ON p.id = cr.portfolio_id
+                 WHERE p.name = %s
+                 ORDER BY cr.flip_date DESC
+                 LIMIT %s
+                """,
+                (portfolio_name, limit),
+            )
+            return [_cycle_ref_row_dict(r) for r in cur.fetchall()]
+
+
+def insert_cycle_reference(
+    portfolio_name: str, flip_date: str, initial_nlv: float,
+    ratcheted_nlv: float, ratcheted_on_date: str,
+) -> int | None:
+    """Create a new cycle_reference row anchored at flip_date. Idempotent
+    on (user, portfolio, flip_date) — returns the existing row's id on
+    conflict rather than raising."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s",
+                        (portfolio_name,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            portfolio_id = row[0]
+            cur.execute(
+                """
+                INSERT INTO cycle_references (
+                    portfolio_id, flip_date,
+                    initial_nlv, ratcheted_nlv, ratcheted_on_date
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, portfolio_id, flip_date) DO NOTHING
+                RETURNING id
+                """,
+                (portfolio_id, flip_date, initial_nlv,
+                 ratcheted_nlv, ratcheted_on_date),
+            )
+            inserted = cur.fetchone()
+            if inserted:
+                conn.commit()
+                return int(inserted[0])
+            # Existing row — fetch its id.
+            cur.execute(
+                "SELECT id FROM cycle_references "
+                " WHERE portfolio_id = %s AND flip_date = %s",
+                (portfolio_id, flip_date),
+            )
+            existing = cur.fetchone()
+            return int(existing[0]) if existing else None
+
+
+def update_cycle_reference_ratchet(
+    cycle_ref_id: int, ratcheted_nlv: float, ratcheted_on_date: str,
+) -> None:
+    """Bump ratcheted_nlv / ratcheted_on_date on an active row. Guarded
+    with is_frozen = FALSE so a stale caller can never mutate a frozen
+    row. No-op if the row was frozen since load."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE cycle_references
+                   SET ratcheted_nlv = %s, ratcheted_on_date = %s
+                 WHERE id = %s AND is_frozen = FALSE
+                """,
+                (ratcheted_nlv, ratcheted_on_date, cycle_ref_id),
+            )
+            conn.commit()
+
+
+def freeze_cycle_reference(cycle_ref_id: int, frozen_at_date: str) -> None:
+    """Mark a cycle_reference as frozen. Idempotent — a second call on an
+    already-frozen row is a no-op (WHERE is_frozen = FALSE)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE cycle_references
+                   SET is_frozen = TRUE, frozen_at_date = %s
+                 WHERE id = %s AND is_frozen = FALSE
+                """,
+                (frozen_at_date, cycle_ref_id),
+            )
+            conn.commit()
+
+
+def load_end_nlv_on_date(portfolio_name: str, day: str) -> float | None:
+    """The end_nlv value for (user, portfolio, day) — used by the ratchet
+    helper's 'anchor a new cycle on a missed flip' fallback path when the
+    engine's trend_cycle_start_date sits earlier than today's save. NULL
+    if no row exists on that date."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT tj.end_nlv
+                  FROM trading_journal tj
+                  JOIN portfolios p ON p.id = tj.portfolio_id
+                 WHERE p.name = %s AND tj.day = %s
+                   AND tj.deleted_at IS NULL
+                   AND tj.end_nlv IS NOT NULL
+                   AND tj.end_nlv > 0
+                 LIMIT 1
+                """,
+                (portfolio_name, day),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row and row[0] else None
+
+
+def load_cummax_end_nlv(
+    portfolio_name: str, start_day: str, end_day: str,
+) -> tuple[float | None, str | None]:
+    """The peak end_nlv (and its date) across [start_day, end_day] for
+    (user, portfolio). Used when anchoring a cycle_reference for a cycle
+    whose flip already happened — the ratchet needs to reflect the peak
+    since flip, not just today's NLV."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT tj.end_nlv, tj.day
+                  FROM trading_journal tj
+                  JOIN portfolios p ON p.id = tj.portfolio_id
+                 WHERE p.name = %s
+                   AND tj.day >= %s AND tj.day <= %s
+                   AND tj.deleted_at IS NULL
+                   AND tj.end_nlv IS NOT NULL
+                   AND tj.end_nlv > 0
+                 ORDER BY tj.end_nlv DESC, tj.day ASC
+                 LIMIT 1
+                """,
+                (portfolio_name, start_day, end_day),
+            )
+            row = cur.fetchone()
+            if not row:
+                return (None, None)
+            return (
+                float(row[0]),
+                row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
+            )

@@ -1567,6 +1567,129 @@ def _compute_suggested_exposure(as_of_date: str = "") -> float | None:
         return None
 
 
+def _ratchet_cycle_reference(
+    portfolio: str, day_str: str, end_nlv: float, trend_count: int | None,
+) -> None:
+    """Maintain cycle_references (migration 068) on every journal save.
+
+    Three cases the helper handles:
+
+      1. **Ratchet** — active row exists, day >= flip_date, trend positive,
+         end_nlv > ratcheted_nlv. Bump ratcheted_nlv + ratcheted_on_date.
+      2. **Freeze** — active row exists, trend just went NEGATIVE
+         (trend_count < 0). Set is_frozen=TRUE, frozen_at_date=day.
+      3. **Anchor a new cycle** — no active row exists, trend is POSITIVE
+         today. Insert a new row using engine-derived trend_cycle_start_date
+         as the flip_date (falls back to `day_str` if unavailable) and the
+         end_nlv on flip_date as initial_nlv. The ratcheted_nlv is the
+         cummax between flip_date and today so a freshly-deployed app
+         mid-cycle catches up correctly.
+
+    Silent no-ops (by design, not errors):
+      * day_str < active flip_date (backfill of pre-cycle data — leave
+        the active anchor alone; older data is not part of this cycle).
+      * end_nlv <= 0 (garbage save — nothing meaningful to ratchet).
+      * DB / lookup failures — logged, swallowed. A save must never fail
+        because the reference maintenance couldn't run; the healer path
+        (future work) can reconcile drift.
+
+    Called after successful writes in journal_edit + journal_batch_edit.
+    Must be tolerant of missing rows / missing portfolios (fresh DBs).
+    """
+    try:
+        if not portfolio or not day_str or end_nlv is None or float(end_nlv) <= 0:
+            return
+        end_nlv = float(end_nlv)
+        active = db.load_active_cycle_reference(portfolio)
+
+        if active is not None:
+            if day_str < active["flip_date"]:
+                # Backfill of pre-cycle data — leave the anchor alone.
+                return
+            if trend_count is not None and trend_count < 0:
+                # Freeze on the first negative-trend day. Idempotent —
+                # a repeat freeze on an already-frozen row is a no-op via
+                # the WHERE is_frozen=FALSE guard in db_layer.
+                db.freeze_cycle_reference(active["id"], day_str)
+                return
+            # Trend positive (or unknown — treat unknown as positive: don't
+            # freeze on a compute failure). Ratchet on a new high.
+            if end_nlv > float(active["ratcheted_nlv"]):
+                db.update_cycle_reference_ratchet(active["id"], end_nlv, day_str)
+            return
+
+        # No active row — only anchor when the trend is clearly positive.
+        # A missing trend_count (engine no-bar / failure) doesn't create a
+        # spurious anchor; wait for a definitive positive signal.
+        if trend_count is None or trend_count <= 0:
+            return
+
+        # Resolve the true flip date. `trend_cycle_start_date` from the
+        # engine is authoritative — the day the 3-consec / 3rd-up-day rule
+        # first satisfied. Fall back to today if the engine has no reading
+        # (e.g. market_data still ingesting); the resulting anchor will be
+        # off by a few sessions but harmless for the L1 drawdown math.
+        flip_date_iso = _compute_trend_cycle_start_date(day_str) or day_str
+        initial_nlv = db.load_end_nlv_on_date(portfolio, flip_date_iso)
+        if initial_nlv is None:
+            # No journal row on the flip date — fall back to today's row.
+            initial_nlv = end_nlv
+            ratcheted_nlv = end_nlv
+            ratcheted_on = day_str
+        else:
+            r_nlv, r_on = db.load_cummax_end_nlv(
+                portfolio, flip_date_iso, day_str)
+            ratcheted_nlv = r_nlv if r_nlv is not None else initial_nlv
+            ratcheted_on = r_on or flip_date_iso
+        db.insert_cycle_reference(
+            portfolio, flip_date_iso, initial_nlv,
+            ratcheted_nlv, ratcheted_on,
+        )
+    except Exception as e:
+        # Never let cycle-reference maintenance break a journal save.
+        print(f"[cycle_ref] ratchet failed for {portfolio} {day_str}: {e}")
+
+
+def _compute_trend_cycle_start_date(as_of_date: str = "") -> str | None:
+    """Engine's trend_cycle_start_date at as_of_date, ISO string or None.
+
+    Companion to _compute_trend_count — same strict-bar-match discipline,
+    same yfinance top-up, same "None on failure" contract. Used by
+    _ratchet_cycle_reference's 'anchor a new cycle' fallback path to
+    locate the actual flip date rather than approximating it to `today`.
+    """
+    try:
+        from datetime import datetime as _dt
+        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
+
+        as_of = None
+        if as_of_date:
+            try:
+                as_of = _dt.strptime(as_of_date.strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, AttributeError):
+                as_of = None
+
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
+
+        result = run_engine("^IXIC", as_of=as_of,
+                            force_correction_at_date=_current_override_date())
+        if result.bars.empty:
+            return None
+        if as_of is not None:
+            trade_dates = pd.to_datetime(result.bars["trade_date"]).dt.date
+            if not (trade_dates == as_of).any():
+                return None
+        payload = to_rally_prefix_response(result)
+        return payload.get("trend_cycle_start_date")
+    except Exception as e:
+        print(f"[trend_cycle_start_date] compute failed: {e}")
+        return None
+
+
 def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
     """Backfill NULL market_cycle / mct_display_day_num / trend_count on
     recent journal rows.
@@ -1868,6 +1991,15 @@ def journal_edit(entry: dict):
                 journal_entry["portfolio_heat"] = _compute_portfolio_heat(portfolio, day_str, equity)
 
         row_id = db.save_journal_entry(journal_entry)
+        # Migration 068 — after a successful save, maintain the
+        # cycle_reference anchor for L1. Silent on failure; never bubbles
+        # up. See _ratchet_cycle_reference for the three-case model
+        # (ratchet / freeze / anchor-new).
+        _ratchet_cycle_reference(
+            portfolio, day_str,
+            float(journal_entry.get("ending_nlv") or 0),
+            journal_entry.get("trend_count"),
+        )
         return {"status": "ok", "id": row_id}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
@@ -2295,6 +2427,24 @@ def journal_batch_edit(body: dict = Body(...)):
                 # Invalidate the load_journal memoize cache so subsequent
                 # reads see the freshly-written rows.
                 db.load_journal.clear()
+
+                # Migration 068 — maintain each portfolio's cycle_reference
+                # anchor. Runs after the atomic write commits so a helper
+                # failure can never leave the batch half-persisted.
+                # trend_count is portfolio-agnostic (IXIC-derived) so we
+                # resolve it once for the day and reuse for every row.
+                cycle_trend_count = _compute_trend_count(day_str)
+                for pf in portfolios:
+                    name = pf["portfolio"]
+                    try:
+                        _ratchet_cycle_reference(
+                            name, day_str,
+                            float(pf.get("end_nlv") or 0),
+                            cycle_trend_count,
+                        )
+                    except Exception as e:
+                        print(f"[batch_edit] cycle_ref maintenance "
+                              f"failed for {name}: {e}")
                 return {
                     "status": "ok",
                     "rows_written": len(written),
@@ -4940,6 +5090,211 @@ def get_dashboard_metrics(portfolio_id: int, request: Request):
         return nlv_service.dashboard_metrics(portfolio_id, match["name"])
     except Exception as e:
         print(f"[get_dashboard_metrics] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/risk/levels")
+@limiter.limit("30/minute")
+def get_risk_levels(portfolio: str, request: Request):
+    """Composed read view powering the new Risk Manager L-series (migration
+    068 + Exit Ladder reuse). Returns:
+
+      * cycle_reference block — the L1 anchor (from cycle_references table).
+        NULL when no active cycle has been seeded for this portfolio.
+      * levels_state — one entry per L1/L2/L3/L4 with trigger text, cap %,
+        and current status (CLEAR / ARMED / FIRED).
+        - L1: NLV-drawdown from cycle_reference_nlv (−7.5% threshold).
+        - L2/L3/L4: derived from the MCT engine's Exit Ladder state
+          (violation_21_fired, consec_below_21, consec_below_50 /
+          violation_50_fired). SAME semantics the existing Exit Ladder
+          card on M Factor uses — this endpoint just maps them into the
+          exposure-governor L-series with the doc's caps (80/60/40/20).
+      * active_level + effective_cap_pct — the deepest L currently
+        satisfied. NULL when the trend cycle is positive and no level has
+        breached.
+      * excess_dollars_to_sell — max(0, (current_exposure_pct −
+        effective_cap_pct) × nlv / 100). What the operator must sell
+        to bring gross exposure inside the cap. Zero when clear.
+      * ath_hwm + ath_drawdown_pct — informational-only (secondary tile
+        on Risk Manager). Not a rule input under the new L-series.
+
+    Portfolio is looked up by name; tenant scoping falls out of RLS
+    (get_db_connection sets app.user_id).
+    """
+    try:
+        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
+
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["name"] == portfolio), None)
+        if match is None:
+            return {"error": f"Portfolio '{portfolio}' not found"}
+
+        metrics = nlv_service.dashboard_metrics(match["id"], portfolio)
+        current_nlv = float(metrics.get("nlv") or 0)
+        exposure_pct = float(metrics.get("exposure_pct") or 0)
+        total_holdings = float(metrics.get("total_holdings") or 0)
+        ath_hwm = float(metrics.get("drawdown_peak_nlv") or 0)
+        ath_drawdown_pct = float(metrics.get("drawdown_current_pct") or 0)
+
+        cycle_ref = db.load_active_cycle_reference(portfolio)
+        # L1 threshold in dollars — cycle reference × 0.925 (−7.5% drawdown
+        # from the ratcheted reference).
+        l1_threshold_nlv: float | None = None
+        l1_drawdown_pct = 0.0
+        l1_breached = False
+        if cycle_ref is not None:
+            ref_nlv = float(cycle_ref["ratcheted_nlv"])
+            l1_threshold_nlv = round(ref_nlv * 0.925, 2)
+            if ref_nlv > 0 and current_nlv > 0:
+                l1_drawdown_pct = round(
+                    ((current_nlv - ref_nlv) / ref_nlv) * 100.0, 4)
+                l1_breached = current_nlv <= l1_threshold_nlv
+
+        # Exit Ladder state — reuse the M Factor engine so L2/L3/L4 read
+        # from the same signals as the existing 21 EMA / 50 SMA card.
+        try:
+            engine_result = run_engine(
+                "^IXIC",
+                force_correction_at_date=_current_override_date(),
+            )
+        except Exception as engine_err:
+            print(f"[risk/levels] engine run failed: {engine_err}")
+            engine_result = None
+
+        state = (engine_result.final_state if engine_result is not None
+                 else {}) or {}
+        consec_below_21 = int(state.get("consec_below_21") or 0)
+        consec_below_50 = int(state.get("consec_below_50") or 0)
+        violation_21 = bool(state.get("violation_21_fired"))
+        violation_50 = bool(state.get("violation_50_fired"))
+
+        # Level firing rules — deepest wins for the active_level label,
+        # but each level's status is reported independently for the UI.
+        l2_fired = violation_21 and not (consec_below_21 >= 2)
+        l3_fired = consec_below_21 >= 2
+        l4_fired = (consec_below_50 >= 2) or violation_50
+
+        # Watch states for the UI ("ARMED but not FIRED"). Mirror the
+        # existing Exit Ladder Watch bucket so both surfaces read the
+        # same. L1 has no watch (it's a scalar threshold).
+        l2_armed = (consec_below_21 == 1) and not l3_fired
+        l4_armed = (consec_below_50 == 1) and not l4_fired
+
+        def _status(fired: bool, armed: bool = False) -> str:
+            if fired:
+                return "FIRED"
+            if armed:
+                return "ARMED"
+            return "CLEAR"
+
+        levels_state = [
+            {
+                "key": "L1",
+                "cap_pct": 80,
+                "action": "Off margin",
+                "trigger": "NLV −7.5% from cycle reference",
+                "status": _status(l1_breached),
+                "detail": (
+                    f"Drawdown from cycle reference: {l1_drawdown_pct:.2f}%"
+                    if cycle_ref is not None
+                    else "No active cycle reference"
+                ),
+                "threshold_nlv": l1_threshold_nlv,
+            },
+            {
+                "key": "L2",
+                "cap_pct": 60,
+                "action": "Cap 60% gross",
+                "trigger": (
+                    "IXIC close below 21 EMA + next-day intraday "
+                    "undercut >1%"
+                ),
+                "status": _status(l2_fired, l2_armed),
+                "detail": (
+                    "21 EMA Violation confirmed"
+                    if l2_fired
+                    else ("1 close below 21 EMA — undercut arms next bar"
+                          if l2_armed else "21 EMA holding")
+                ),
+            },
+            {
+                "key": "L3",
+                "cap_pct": 40,
+                "action": "Cap 40% gross",
+                "trigger": "IXIC 2 consecutive closes below 21 EMA",
+                "status": _status(l3_fired),
+                "detail": (
+                    f"{consec_below_21} consecutive closes below 21 EMA"
+                    if consec_below_21 > 0 else "21 EMA holding"
+                ),
+            },
+            {
+                "key": "L4",
+                "cap_pct": 20,
+                "action": "Cap 20% — SR8 holds only",
+                "trigger": "IXIC 2 consecutive closes below 50 SMA",
+                "status": _status(l4_fired, l4_armed),
+                "detail": (
+                    "50 SMA Violation confirmed" if violation_50
+                    else (f"{consec_below_50} consecutive closes below 50 SMA"
+                          if consec_below_50 > 0 else "50 SMA holding")
+                ),
+            },
+        ]
+
+        # active_level = deepest cap satisfied (smallest cap_pct among
+        # FIRED). Effective cap = that level's cap_pct. Clear = no fired
+        # level → no cap governance from L-series; the M Factor entry_exposure
+        # ladder holds.
+        fired = [lv for lv in levels_state if lv["status"] == "FIRED"]
+        active_level: str | None = None
+        effective_cap_pct: float | None = None
+        if fired:
+            deepest = min(fired, key=lambda lv: int(lv["cap_pct"]))
+            active_level = str(deepest["key"])
+            effective_cap_pct = float(deepest["cap_pct"])
+
+        # $ that must be sold to bring gross exposure inside the cap.
+        # Only meaningful when effective_cap_pct is set AND the current
+        # exposure exceeds it.
+        excess_dollars_to_sell = 0.0
+        if effective_cap_pct is not None and exposure_pct > effective_cap_pct:
+            excess_dollars_to_sell = round(
+                (exposure_pct - effective_cap_pct) / 100.0 * current_nlv, 2)
+
+        # M Factor suggested exposure — the entry_exposure ladder ceiling
+        # that governs the CLEAR case. Live read (not the journal stamp)
+        # so the Risk Manager reflects the current M Factor state, not
+        # yesterday's saved value.
+        m_factor_pct: float | None = None
+        if engine_result is not None:
+            try:
+                payload = to_rally_prefix_response(engine_result)
+                raw = payload.get("entry_exposure")
+                m_factor_pct = float(raw) if raw is not None else None
+            except Exception as tr_err:
+                print(f"[risk/levels] rally_prefix translate failed: {tr_err}")
+
+        return {
+            "portfolio": portfolio,
+            "cycle_reference": (
+                {**cycle_ref, "l1_threshold_nlv": l1_threshold_nlv}
+                if cycle_ref is not None else None
+            ),
+            "current_nlv": current_nlv,
+            "current_exposure_pct": exposure_pct,
+            "current_gross_holdings": total_holdings,
+            "current_drawdown_from_cycle_pct": l1_drawdown_pct,
+            "ath_hwm": ath_hwm,
+            "ath_drawdown_pct": ath_drawdown_pct,
+            "m_factor_suggested_exposure_pct": m_factor_pct,
+            "levels_state": levels_state,
+            "active_level": active_level,
+            "effective_cap_pct": effective_cap_pct,
+            "excess_dollars_to_sell": excess_dollars_to_sell,
+        }
+    except Exception as e:
+        print(f"[get_risk_levels] handler failed: {e}")
         return {"error": str(e)}
 
 

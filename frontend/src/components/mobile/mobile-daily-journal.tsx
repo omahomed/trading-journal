@@ -260,7 +260,12 @@ function gradeColor(score: number): string {
   return "var(--m-text-dim)";
 }
 
-// Drawdown color tiers — mirrors daily-journal.tsx:336-337 exactly.
+// Drawdown color tiers — mirrors daily-journal.tsx exactly. Migration
+// 068 replaced the actionable "REMOVE MARGIN / GO TO CASH" copy (ATH-
+// anchored) with severity labels because the new L-series governor is
+// cycle-anchored + IXIC-structural. Historical days don't have a per-
+// day cycle_reference snapshot, so we render DD magnitude here; live
+// risk state lives on the Risk Manager page.
 function drawdownTierColor(pct: number): string {
   if (pct >= -7.5) return "var(--m-accent)";
   if (pct >= -12.5) return "var(--m-warn)";
@@ -268,10 +273,10 @@ function drawdownTierColor(pct: number): string {
 }
 
 function drawdownTierMessage(pct: number): string {
-  if (pct >= -7.5) return "GREEN LIGHT";
-  if (pct >= -12.5) return "CAUTION";
-  if (pct >= -15) return "MAX 30% INVESTED";
-  return "GO TO CASH";
+  if (pct >= -7.5) return "CLEAR";
+  if (pct >= -12.5) return "MODERATE DD";
+  if (pct >= -15) return "DEEP DD";
+  return "CRITICAL DD";
 }
 
 // Chained YTD% from a series of daily_pct_change values.
