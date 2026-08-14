@@ -13,6 +13,7 @@
 
 export const LESSON_CATEGORIES = [
   "Followed Rules", "Entry timing", "FOMO", "Chased Entry",
+  "Bought Too Early",
   "Stop placement", "Undersized", "Oversized",
   "Scaled in too fast", "Exit too early", "Exit too late",
   "Market conditions", "Portfolio Management", "Rule deviation", "Other",
@@ -23,6 +24,7 @@ export const CAT_COLORS: Record<string, { bg: string; fg: string }> = {
   "Entry timing": { bg: "color-mix(in oklab, #f59f00 12%, var(--surface))", fg: "#b45309" },
   "FOMO": { bg: "#fce7f3", fg: "#be185d" },
   "Chased Entry": { bg: "#fae8ff", fg: "#a21caf" },
+  "Bought Too Early": { bg: "#fef3c7", fg: "#a16207" },
   "Stop placement": { bg: "#fed7aa", fg: "#c2410c" },
   "Undersized": { bg: "#dbeafe", fg: "#3b82f6" },
   "Oversized": { bg: "#ede9fe", fg: "#6d28d9" },
