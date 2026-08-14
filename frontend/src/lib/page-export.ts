@@ -40,51 +40,34 @@ export function downloadTextFile(text: string, filename: string, mime = "text/cs
 export async function exportPng(node: HTMLElement | null, filename: string): Promise<void> {
   if (!node) return;
 
-  // Unclip everything scrollable in the subtree — plus the capture root
-  // itself — so the snapshot captures the FULL natural content instead
-  // of the viewport-clipped slice. The Tailwind `w-full` pattern used
-  // on ACS's Equities table means the table is 100% of the
-  // overflow-x-auto parent, which is 100% of the ACS root. Setting the
-  // root to `max-content` (width + height) lets the whole chain size to
-  // natural content. `min-width: max-content` on every scrollable
-  // descendant forces the wide table's parent to grow instead of
-  // clipping. Every mutation is reverted in the finally block.
+  // Unclip vertically-scrollable descendants (frees rows below the
+  // fold) + push horizontally-scrollable descendants + their inner
+  // <table> elements to `min-width: max-content` so the table can lay
+  // out at its natural column widths instead of shrinking to
+  // viewport. Every mutation is reverted in the finally block.
+  //
+  // NOTE: we deliberately DON'T touch the capture root itself. An
+  // earlier version set `width/height: max-content` on the root, but
+  // that collapsed the entire snapshot to a blank rectangle because
+  // the root sits inside a flex-parent (`<main class="flex-1">`) and
+  // `max-content` on a flex child interacts badly with the parent's
+  // width resolution. Descendant-only mutations are the surgical fix.
   const restores: Array<() => void> = [];
-  const forceExpand = (el: HTMLElement, alsoRoot = false): void => {
-    const orig = {
-      overflow: el.style.overflow,
-      overflowY: el.style.overflowY,
-      overflowX: el.style.overflowX,
-      maxHeight: el.style.maxHeight,
-      height: el.style.height,
-      maxWidth: el.style.maxWidth,
-      width: el.style.width,
-      minWidth: el.style.minWidth,
-    };
+  const saveAndSet = (
+    el: HTMLElement,
+    updates: Partial<CSSStyleDeclaration>,
+  ): void => {
+    const keys = Object.keys(updates) as Array<keyof CSSStyleDeclaration>;
+    const orig: Record<string, string> = {};
+    for (const k of keys) orig[k as string] = el.style.getPropertyValue(k as string);
     restores.push(() => {
-      el.style.overflow = orig.overflow;
-      el.style.overflowY = orig.overflowY;
-      el.style.overflowX = orig.overflowX;
-      el.style.maxHeight = orig.maxHeight;
-      el.style.height = orig.height;
-      el.style.maxWidth = orig.maxWidth;
-      el.style.width = orig.width;
-      el.style.minWidth = orig.minWidth;
+      for (const k of keys) {
+        const val = orig[k as string];
+        if (val) el.style.setProperty(k as string, val);
+        else el.style.removeProperty(k as string);
+      }
     });
-    el.style.overflow = "visible";
-    el.style.overflowY = "visible";
-    el.style.overflowX = "visible";
-    el.style.maxHeight = "none";
-    el.style.maxWidth = "none";
-    el.style.minWidth = "max-content";
-    if (alsoRoot) {
-      // Root: also force width/height auto so the whole capture region
-      // sizes to its natural content, not the viewport it's mounted in.
-      el.style.width = "max-content";
-      el.style.height = "max-content";
-    } else {
-      el.style.height = "auto";
-    }
+    Object.assign(el.style, updates);
   };
   const isScrollable = (el: Element): boolean => {
     const cs = getComputedStyle(el);
@@ -94,19 +77,33 @@ export async function exportPng(node: HTMLElement | null, filename: string): Pro
       /(auto|scroll)/.test(cs.overflowX)
     );
   };
-  // Root always gets expanded (even if it's not scrollable itself, its
-  // ancestor <main> is; forcing max-content decouples the snapshot from
-  // the viewport).
-  forceExpand(node, true);
   node.querySelectorAll<HTMLElement>("*").forEach((el) => {
-    if (isScrollable(el)) forceExpand(el);
+    if (isScrollable(el)) {
+      saveAndSet(el, {
+        overflow: "visible",
+        overflowY: "visible",
+        overflowX: "visible",
+        maxHeight: "none",
+        maxWidth: "none",
+        // Force horizontal expansion so a wide table (e.g. ACS's
+        // 14-column Equities table) can grow past viewport width
+        // instead of getting clipped by `w-full` inside an
+        // overflow-x-auto wrapper.
+        minWidth: "max-content",
+      });
+    }
+  });
+  // Direct min-width on <table> elements too — `w-full` on a table
+  // means 100% of its parent, so lifting the wrapper alone isn't
+  // enough; the table itself needs permission to grow.
+  node.querySelectorAll<HTMLElement>("table").forEach((tbl) => {
+    saveAndSet(tbl, { minWidth: "max-content", width: "max-content" });
   });
 
   try {
     const { toPng } = await import("html-to-image");
-    // Force reflow BEFORE reading scrollWidth/Height so the values
-    // reflect the post-unclip layout, not the pre-mutation size.
-    // getBoundingClientRect is the standard synchronous-layout trigger.
+    // Force synchronous reflow so the fresh scrollWidth/Height reflect
+    // the post-unclip layout, not the pre-mutation size.
     void node.getBoundingClientRect();
     const w = Math.max(node.scrollWidth, node.offsetWidth);
     const h = Math.max(node.scrollHeight, node.offsetHeight);
