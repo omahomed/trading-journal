@@ -2207,7 +2207,17 @@ def journal_batch_edit(body: dict = Body(...)):
                         market_cycle = existing_row[4] or ""
                         mct_display_day_num = existing_row[5]
                         trend_count = existing_row[6]
-                        suggested_exposure_pct = existing_row[11]
+                        # Migration 067 — if the existing row has NULL
+                        # suggested_exposure_pct (row saved before 067, or
+                        # engine had no bar at prior save time), backfill
+                        # on this save. Preserve any stored non-NULL value.
+                        # Without this, rows created pre-067 would stay
+                        # NULL forever even after later NLV Entry re-saves.
+                        suggested_exposure_pct = (
+                            existing_row[11]
+                            if existing_row[11] is not None
+                            else _compute_suggested_exposure(day_str)
+                        )
                     else:
                         market_cycle, mct_display_day_num = (
                             _compute_mct_state_with_day_num(day_str))
