@@ -8866,12 +8866,22 @@ import uuid as _uuid
 # HEIC→JPEG conversions can exceed 5MB at high quality, and the larger
 # headroom de-risks the mobile upload flow without inviting absurd sizes.
 _SNAPSHOT_MAX_BYTES = 15 * 1024 * 1024
-_SNAPSHOT_ALLOWED_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_SNAPSHOT_ALLOWED_MIMES = {
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    # PDFs (broker statements, earnings sheets, external reports) —
+    # already accepted by Log Buy / Log Sell / Trade Journal uploads;
+    # extending to Daily Journal captures + Weekly Retro snapshots for
+    # parity. r2_storage's content_type_map already knows the .pdf ext,
+    # and ImageGallery renders PDF items as a link tile (not <img>) so
+    # display works without a downstream change.
+    "application/pdf",
+}
 _SNAPSHOT_MIME_TO_EXT = {
     "image/png": "png",
     "image/jpeg": "jpg",
     "image/gif": "gif",
     "image/webp": "webp",
+    "application/pdf": "pdf",
 }
 
 

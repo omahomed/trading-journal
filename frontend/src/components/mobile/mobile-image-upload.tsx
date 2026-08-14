@@ -103,6 +103,9 @@ const DEFAULT_ACCEPTED: ReadonlySet<string> = new Set([
   "image/jpeg",
   "image/gif",
   "image/webp",
+  // PDFs — parity with desktop SnapshotGallery for attaching broker
+  // statements / earnings sheets to Daily Journal captures.
+  "application/pdf",
 ]);
 const ERROR_AUTODISMISS_MS = 3000;
 
@@ -297,7 +300,7 @@ export function MobileImageUpload<TRow extends ImageUploadRow>({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf"
         multiple
         onChange={handleInputChange}
         className="hidden"

@@ -81,6 +81,11 @@ const ALLOWED_MIMES = new Set([
   "image/jpeg",
   "image/gif",
   "image/webp",
+  // PDFs — Daily Journal captures + Weekly Retro snapshots often want
+  // to attach broker statements or earnings sheets. Backend allowlist
+  // + r2_storage content-type map already cover .pdf; ImageGallery
+  // renders PDF items as a link tile via its isPdf() helper.
+  "application/pdf",
 ]);
 
 interface PlaceholderRow {
@@ -358,7 +363,7 @@ export function SnapshotGallery({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
+        accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
         multiple
         onChange={handleFilePickerChange}
         style={{ display: "none" }}
