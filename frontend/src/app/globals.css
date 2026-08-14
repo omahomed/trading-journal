@@ -210,13 +210,24 @@ body {
     margin: 0.4in;
   }
 
-  /* Hide app chrome — sidebar + top nav bar + any element opted out. */
+  /* Hide app chrome — sidebar, top nav bar, mobile shell (mobile
+     chrome would leak in when the print viewport is narrow enough to
+     trigger the .m-only media query), and any element opted out. */
   aside,
   .desktop-shell-header,
   main > header,
+  .m-only,
   .no-print,
   .no-print * {
     display: none !important;
+  }
+
+  /* Force the desktop tree to render regardless of print viewport
+     width — mobile-tokens.css's `.d-only` rule hides desktop when
+     under 1024px, which fires in Chrome's portrait print viewport
+     even with @page landscape declared. Belt + suspenders. */
+  .d-only {
+    display: block !important;
   }
 
   /* Unclip everything so wide tables + long lists lay out naturally.
@@ -235,6 +246,13 @@ body {
     max-width: none !important;
     margin: 0 !important;
     padding: 0 !important;
+  }
+
+  /* KPI grid: force a wider layout by dropping the `grid-cols-7` cap
+     when the page is narrower than the natural tile widths. Tiles
+     shrink proportionally instead of overlapping their content. */
+  .grid {
+    gap: 6px !important;
   }
 
   /* Force color print — Chrome/Safari default to stripping backgrounds. */
