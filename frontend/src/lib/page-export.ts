@@ -40,13 +40,52 @@ export function downloadTextFile(text: string, filename: string, mime = "text/cs
 export async function exportPng(node: HTMLElement | null, filename: string): Promise<void> {
   if (!node) return;
 
-  // Walk the subtree and unclip any scrollable descendants so the
-  // snapshot captures the full content instead of only what's visible
-  // in the viewport. ACS's Equities table (overflow-auto + inline
-  // width) was truncating the last 2 rows on export — same class of
-  // bug bites any page with a scrolling data table. Every mutation is
-  // reverted in the finally block, even on error.
+  // Unclip everything scrollable in the subtree — plus the capture root
+  // itself — so the snapshot captures the FULL natural content instead
+  // of the viewport-clipped slice. The Tailwind `w-full` pattern used
+  // on ACS's Equities table means the table is 100% of the
+  // overflow-x-auto parent, which is 100% of the ACS root. Setting the
+  // root to `max-content` (width + height) lets the whole chain size to
+  // natural content. `min-width: max-content` on every scrollable
+  // descendant forces the wide table's parent to grow instead of
+  // clipping. Every mutation is reverted in the finally block.
   const restores: Array<() => void> = [];
+  const forceExpand = (el: HTMLElement, alsoRoot = false): void => {
+    const orig = {
+      overflow: el.style.overflow,
+      overflowY: el.style.overflowY,
+      overflowX: el.style.overflowX,
+      maxHeight: el.style.maxHeight,
+      height: el.style.height,
+      maxWidth: el.style.maxWidth,
+      width: el.style.width,
+      minWidth: el.style.minWidth,
+    };
+    restores.push(() => {
+      el.style.overflow = orig.overflow;
+      el.style.overflowY = orig.overflowY;
+      el.style.overflowX = orig.overflowX;
+      el.style.maxHeight = orig.maxHeight;
+      el.style.height = orig.height;
+      el.style.maxWidth = orig.maxWidth;
+      el.style.width = orig.width;
+      el.style.minWidth = orig.minWidth;
+    });
+    el.style.overflow = "visible";
+    el.style.overflowY = "visible";
+    el.style.overflowX = "visible";
+    el.style.maxHeight = "none";
+    el.style.maxWidth = "none";
+    el.style.minWidth = "max-content";
+    if (alsoRoot) {
+      // Root: also force width/height auto so the whole capture region
+      // sizes to its natural content, not the viewport it's mounted in.
+      el.style.width = "max-content";
+      el.style.height = "max-content";
+    } else {
+      el.style.height = "auto";
+    }
+  };
   const isScrollable = (el: Element): boolean => {
     const cs = getComputedStyle(el);
     return (
@@ -55,44 +94,29 @@ export async function exportPng(node: HTMLElement | null, filename: string): Pro
       /(auto|scroll)/.test(cs.overflowX)
     );
   };
-  const nodesToUnclip: HTMLElement[] = [];
-  if (isScrollable(node)) nodesToUnclip.push(node);
+  // Root always gets expanded (even if it's not scrollable itself, its
+  // ancestor <main> is; forcing max-content decouples the snapshot from
+  // the viewport).
+  forceExpand(node, true);
   node.querySelectorAll<HTMLElement>("*").forEach((el) => {
-    if (isScrollable(el)) nodesToUnclip.push(el);
+    if (isScrollable(el)) forceExpand(el);
   });
-  for (const el of nodesToUnclip) {
-    const orig = {
-      overflow: el.style.overflow,
-      overflowY: el.style.overflowY,
-      overflowX: el.style.overflowX,
-      maxHeight: el.style.maxHeight,
-      height: el.style.height,
-    };
-    restores.push(() => {
-      el.style.overflow = orig.overflow;
-      el.style.overflowY = orig.overflowY;
-      el.style.overflowX = orig.overflowX;
-      el.style.maxHeight = orig.maxHeight;
-      el.style.height = orig.height;
-    });
-    el.style.overflow = "visible";
-    el.style.overflowY = "visible";
-    el.style.overflowX = "visible";
-    el.style.maxHeight = "none";
-    el.style.height = "auto";
-  }
 
   try {
     const { toPng } = await import("html-to-image");
-    // Force canvas dimensions to the fully-expanded scrollHeight/Width
-    // so html-to-image doesn't guess based on the pre-unclip layout.
+    // Force reflow BEFORE reading scrollWidth/Height so the values
+    // reflect the post-unclip layout, not the pre-mutation size.
+    // getBoundingClientRect is the standard synchronous-layout trigger.
+    void node.getBoundingClientRect();
+    const w = Math.max(node.scrollWidth, node.offsetWidth);
+    const h = Math.max(node.scrollHeight, node.offsetHeight);
     const dataUrl = await toPng(node, {
       cacheBust: true,
       pixelRatio: 2,
-      width: node.scrollWidth,
-      height: node.scrollHeight,
-      canvasWidth: node.scrollWidth,
-      canvasHeight: node.scrollHeight,
+      width: w,
+      height: h,
+      canvasWidth: w,
+      canvasHeight: h,
       backgroundColor:
         getComputedStyle(document.body).getPropertyValue("--bg").trim() || "#f6f7fb",
     });
