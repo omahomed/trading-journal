@@ -160,7 +160,9 @@ interface Filters {
   // (post-mortem framing — "trades closed in the last N"); open
   // positions without a close_date drop out of a filtered view.
   // "open" filters by open_date so open positions stay visible.
-  date_basis: "close" | "open";
+  // "all" passes if EITHER date matches the range — useful for "show
+  // every campaign active today" (opened today OR closed today).
+  date_basis: "close" | "open" | "all";
 }
 const EMPTY_FILTERS: Filters = {
   q: "", status: [], tickers: [], rule: "all", pl: "all", rank: "all",
@@ -764,16 +766,28 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       // Date-preset filter. `date_basis` picks which column the
       // range applies to — "close" (default) matches the review
       // framing; "open" filters on entry date and keeps open
-      // positions visible under a filtered view. When the chosen
-      // field is missing (basis="close" on an open position) and a
-      // filter is active, the row is excluded — the honest read is
-      // "this doesn't match a close-date filter because it hasn't
-      // closed yet".
-      const dateField = filters.date_basis === "open" ? r.open_date : r.closed_date;
+      // positions visible under a filtered view; "all" passes if
+      // EITHER date matches (surfaces campaigns that opened OR
+      // closed inside the range — e.g. "everything active today").
+      // When the chosen field is missing and a filter is active,
+      // the row is excluded — the honest read for basis="close"
+      // is "this hasn't closed yet, so it can't match a close-date
+      // filter". For basis="all" a row with at least one date
+      // still gets its shot.
       const filterActive = filters.dateRange !== "all";
-      if (filterActive && !dateField) return false;
-      const d = (dateField || "").slice(0, 10);
-      if (!dateFilterPasses(d, filters)) return false;
+      if (filters.date_basis === "all") {
+        if (!filterActive) return true;
+        const openStr = (r.open_date || "").slice(0, 10);
+        const closeStr = (r.closed_date || "").slice(0, 10);
+        const openMatch = !!openStr && dateFilterPasses(openStr, filters);
+        const closeMatch = !!closeStr && dateFilterPasses(closeStr, filters);
+        if (!openMatch && !closeMatch) return false;
+      } else {
+        const dateField = filters.date_basis === "open" ? r.open_date : r.closed_date;
+        if (filterActive && !dateField) return false;
+        const d = (dateField || "").slice(0, 10);
+        if (!dateFilterPasses(d, filters)) return false;
+      }
       return true;
     });
 
@@ -1442,10 +1456,11 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             />
             <SegmentedControl label="Basis"
               value={filters.date_basis}
-              onChange={v => setFilters(f => ({ ...f, date_basis: v as "close" | "open" }))}
+              onChange={v => setFilters(f => ({ ...f, date_basis: v as "close" | "open" | "all" }))}
               options={[
                 { v: "close", l: "Close" },
                 { v: "open",  l: "Open"  },
+                { v: "all",   l: "All"   },
               ]}
               testId="filter-date-basis"
             />
@@ -1619,12 +1634,41 @@ export function CampaignReview({ navColor }: { navColor: string }) {
                       return <span style={{ color: pct >= 0 ? "#08a86b" : "#e5484d" }}>{pct.toFixed(1)}%</span>;
                     })()}
                   </td>
-                  {/* R / MAE / MFE / Buy Rule / Sell Rule / Lesson /
-                      caret columns don't aggregate meaningfully; leave
-                      empty in the totals row rather than displaying
-                      a misleading average across trades. */}
-                  <td className="px-3 py-2" />
-                  <td className="px-3 py-2" />
+                  {/* R total — sum of realized R-multiples across
+                      trades that have one (open campaigns / legacy
+                      rows without risk_budget are skipped). "Net R
+                      across the filtered set" — the natural read
+                      for how many multiples of initial risk the
+                      cohort produced. */}
+                  <td className="px-3 py-2 text-right font-bold" style={{ fontFamily: mono }}>
+                    {(() => {
+                      const contribs = sorted
+                        .map(r => r.r_multiple)
+                        .filter((v): v is number => v != null);
+                      if (contribs.length === 0) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+                      const sum = contribs.reduce((t, v) => t + v, 0);
+                      return <span style={{ color: sum >= 0 ? "#08a86b" : "#e5484d" }}>{sum.toFixed(2)}R</span>;
+                    })()}
+                  </td>
+                  {/* % NLV total — sum of per-trade Impact % NLV.
+                      Each row's % is anchored to its own close-date
+                      NLV, so this is an approximation of "how much
+                      the filtered cohort moved the account", not a
+                      time-weighted return. Still the most useful
+                      first-order aggregate for a review table. */}
+                  <td className="px-3 py-2 text-right font-bold" style={{ fontFamily: mono }}>
+                    {(() => {
+                      const contribs = sorted
+                        .map(r => r.impact_pct_nlv)
+                        .filter((v): v is number => v != null);
+                      if (contribs.length === 0) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+                      const sum = contribs.reduce((t, v) => t + v, 0);
+                      return <span style={{ color: sum >= 0 ? "#08a86b" : "#e5484d" }}>{sum.toFixed(2)}%</span>;
+                    })()}
+                  </td>
+                  {/* MAE / MFE / Buy Rule / Sell Rule / Lesson / caret
+                      columns don't aggregate meaningfully; leave
+                      empty rather than displaying a misleading number. */}
                   <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
