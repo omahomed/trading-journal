@@ -982,7 +982,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               })()}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 no-print">
+            {/* Print button — calls window.print(); the browser handles
+                pagination + save-as-PDF. Print CSS in globals.css hides
+                sidebar / chrome / this button itself, unclips overflows,
+                and repeats the table header on every printed page. */}
+            <button onClick={() => window.print()}
+                    data-testid="acs-print"
+                    className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 6 2 18 2 18 9"/>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                <rect x="6" y="14" width="12" height="8"/>
+              </svg>
+              Print
+            </button>
             <button onClick={() => loadData({ force: true })}
                     disabled={refetching}
                     className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"

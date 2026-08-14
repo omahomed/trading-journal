@@ -187,6 +187,87 @@ body {
   pointer-events: none;
 }
 
+/* ============================================================================
+   PRINT STYLES — Cmd+P / window.print() → clean paginated output.
+   ============================================================================
+   Uses the browser's own print pipeline instead of client-side DOM screenshot
+   (html-to-image), which was fragile against overflow-auto + flex-parent
+   interactions on complex pages like ACS. Every element gets
+   `overflow: visible !important` in print media so wide tables lay out at
+   their natural column widths and long tables paginate across pages.
+   Backgrounds are forced to print (browsers strip them by default in the
+   name of saving toner — our tables rely on background color for tier chips,
+   deck badges, etc.).
+
+   Opt-out: add class="no-print" to any element that shouldn't appear in the
+   printed output (e.g. action buttons, "Refresh" spinners, sidebars). The
+   app shell's <aside> sidebar and top <header> chrome are hidden by
+   selector — they're structural, so no explicit class needed.
+   ========================================================================== */
+@media print {
+  @page {
+    size: letter landscape;
+    margin: 0.4in;
+  }
+
+  /* Hide app chrome — sidebar + top nav bar + any element opted out. */
+  aside,
+  .desktop-shell-header,
+  main > header,
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  /* Unclip everything so wide tables + long lists lay out naturally.
+     Print media doesn't have scrollbars; overflow: visible lets content
+     flow onto extra pages instead of getting cropped inside a fixed box. */
+  * {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  /* Give the main content area the full page width. */
+  html, body, main, [id$="-capture-root"] {
+    background: white !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Force color print — Chrome/Safari default to stripping backgrounds. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Kill animations + transitions so print doesn't wait on them. */
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
+
+  /* Tables: keep rows intact across page breaks; repeat the header row
+     on every printed page (thead as table-header-group is the standard
+     recipe browsers honor). */
+  table {
+    font-size: 10px !important;
+    page-break-inside: auto;
+    border-collapse: collapse !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+}
+
 /* Markdown rendering — Daily Thoughts, etc. */
 .prose-custom h1 { font-size: 20px; font-weight: 700; margin: 12px 0 8px; }
 .prose-custom h2 { font-size: 16px; font-weight: 700; margin: 16px 0 8px; color: var(--ink); }
