@@ -205,8 +205,12 @@ body {
    selector — they're structural, so no explicit class needed.
    ========================================================================== */
 @media print {
+  /* Explicit numeric size (11 × 8.5 inch) is more reliably honored by
+     Chrome than the `letter landscape` keyword form — the keyword can
+     get overridden by the print dialog's default portrait, especially
+     on macOS Chrome where the Layout dropdown isn't always exposed. */
   @page {
-    size: letter landscape;
+    size: 11in 8.5in;
     margin: 0.4in;
   }
 
@@ -239,8 +243,20 @@ body {
     height: auto !important;
   }
 
-  /* Give the main content area the full page width. */
-  html, body, main, [id$="-capture-root"] {
+  /* Give the main content area the full page width AND force a wide
+     minimum so a portrait fallback still lays out at landscape-like
+     width. Chrome's "Scale: Fit to page width" (default) will scale
+     the 1400px body down to fit whatever paper size actually prints —
+     the table stays intact instead of clipping columns. */
+  html, body {
+    background: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body {
+    min-width: 1400px !important;
+  }
+  main, [id$="-capture-root"] {
     background: white !important;
     width: 100% !important;
     max-width: none !important;
