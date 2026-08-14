@@ -7,13 +7,90 @@
 // includes trend_count), groups rows by sign, and computes leg metrics
 // via lib/trend-cycles. No new backend endpoint, no persisted state.
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { getGroupForHref } from "@/lib/nav";
 import { computeTrendCycles, type TrendCycleLeg } from "@/lib/trend-cycles";
+import { log } from "@/lib/log";
 import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
+
+function csvEscape(v: unknown): string {
+  if (v == null) return "";
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Download the sorted leg set as CSV. Excel opens the .csv natively —
+ *  same "one-file export that spreadsheets consume without a converter"
+ *  contract Campaign Review and Journal Log already ship. Column order
+ *  mirrors the on-screen table so eyeballing the download matches the
+ *  view. */
+function exportCsv(legs: TrendCycleLeg[], portfolio: string): void {
+  const headers = [
+    "Cycle #", "Sign", "Start Date", "End Date", "Duration (days)",
+    "Start NLV", "End NLV", "P&L $", "P&L %",
+    "NDX %", "SPY %", "Alpha vs SPY %",
+    "Max Drawdown %", "Avg % Invested",
+  ];
+  const lines = [headers.join(",")];
+  for (const l of legs) {
+    lines.push([
+      l.cycle_number,
+      l.sign === 1 ? "Positive" : "Negative",
+      l.start_date,
+      l.end_date,
+      l.duration_days,
+      l.start_nlv ?? "",
+      l.end_nlv ?? "",
+      l.return_dollars ?? "",
+      l.return_pct == null ? "" : l.return_pct.toFixed(2),
+      l.ndx_return_pct == null ? "" : l.ndx_return_pct.toFixed(2),
+      l.spy_return_pct == null ? "" : l.spy_return_pct.toFixed(2),
+      l.alpha_pct == null ? "" : l.alpha_pct.toFixed(2),
+      l.max_drawdown_pct.toFixed(2),
+      l.avg_pct_invested.toFixed(1),
+    ].map(csvEscape).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `trend-cycle-review-${portfolio}-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** Snapshot the results container to a PNG file. Uses `html-to-image`
+ *  (already in node_modules; same lib the Weekly Retro export uses).
+ *  Dynamic import so the module stays out of the initial bundle — the
+ *  page renders fast even for operators who never click Export PNG. */
+async function exportPng(node: HTMLElement | null, portfolio: string): Promise<void> {
+  if (!node) return;
+  try {
+    const { toPng } = await import("html-to-image");
+    const dataUrl = await toPng(node, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor:
+        getComputedStyle(document.body).getPropertyValue("--bg").trim() || "#f6f7fb",
+    });
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = dataUrl;
+    a.download = `trend-cycle-review-${portfolio}-${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) {
+    log.error("trend-cycle-review", "PNG export failed", e);
+    alert("PNG export failed — see console.");
+  }
+}
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -136,6 +213,11 @@ export function TrendCycleReview() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [sortKey, setSortKey] = useState<SortKey>("end_date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [pngBusy, setPngBusy] = useState(false);
+  // Snapshot target for the PNG export — everything from the summary
+  // strip through the results table. Keeps the header + filter bar out
+  // of the image; the download represents "what I'm looking at" cleanly.
+  const exportRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -208,17 +290,47 @@ export function TrendCycleReview() {
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <MobileDesktopOnlyBanner reason="Wide trend-cycle table. Best on desktop." />
       {/* Header */}
-      <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          Trend Cycle <em className="italic" style={{ color: navColor }}>Review</em>
-        </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          Per-leg performance — return, alpha vs NASDAQ, drawdown, and exposure discipline for every 21e trend cycle you've journaled.
+      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
+           style={{ borderBottom: "1px solid var(--border)" }}>
+        <div>
+          <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Trend Cycle <em className="italic" style={{ color: navColor }}>Review</em>
+          </h1>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+            Per-leg performance — return, alpha vs NASDAQ, drawdown, and exposure discipline for every 21e trend cycle you've journaled.
+          </div>
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button type="button"
+                  onClick={() => exportCsv(sorted, getActivePortfolio())}
+                  disabled={sorted.length === 0}
+                  data-testid="tcr-export-csv"
+                  className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+            ↓ Export CSV
+          </button>
+          <button type="button"
+                  onClick={async () => {
+                    setPngBusy(true);
+                    try { await exportPng(exportRef.current, getActivePortfolio()); }
+                    finally { setPngBusy(false); }
+                  }}
+                  disabled={sorted.length === 0 || pngBusy}
+                  data-testid="tcr-export-png"
+                  className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: pngBusy ? "var(--ink-4)" : "var(--ink-2)" }}>
+            {pngBusy ? "…" : "↓"} Export PNG
+          </button>
         </div>
       </div>
 
-      {/* Filter bar */}
-      <div className="rounded-[14px] overflow-hidden mb-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+      {/* Filter bar + anatomy + summary + table. Wrapped with exportRef
+          so the PNG snapshot captures the operator's active filters as
+          context above the results (matches the "screenshot what I'm
+          looking at" mental model). */}
+      <div ref={exportRef}
+           className="rounded-[14px] overflow-hidden mb-4"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <div className="px-[18px] py-[14px] flex flex-wrap items-end gap-[12px_14px]"
              style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
           <SegmentedControl<SignKey>
