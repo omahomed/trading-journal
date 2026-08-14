@@ -21,6 +21,7 @@ import { SR8DeclareModal } from "./sr8-declare-modal";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
 import { SR12FloorNudgeBanner } from "./sr12-floor-nudge-banner";
 import { isCushionQualified } from "@/lib/sell-rule";
+import { exportPng, todayStamp } from "@/lib/page-export";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
 // changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
@@ -185,6 +186,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // auto-promote POST. Each trade_id fires at most one promotion per
   // component lifetime; the backend SQL guard handles cross-tab races.
   const promotedRef = useRef<Set<string>>(new Set());
+  // Snapshot target for the PNG export — whole slide-up root so the
+  // download captures header + KPI strip + Equity table + Options
+  // table + Notes rail. Same "screenshot what I'm looking at" pattern
+  // as Trend Cycle Review / Dashboard export.
+  const captureRef = useRef<HTMLDivElement | null>(null);
+  const [pngBusy, setPngBusy] = useState(false);
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   // Glossary sits just above Risk Monitor with the same collapsible
   // shell. Closed by default — the values in the tables are the
@@ -895,7 +902,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const showBanner = !bannerDismissed && options.length > 0;
 
   return (
-    <div id="campaign-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
+    <div id="campaign-capture-root" ref={captureRef} style={{ animation: "slide-up 0.18s ease-out" }}>
       {showBanner && (
         <div className="mb-4 rounded-[10px] px-4 py-3 flex items-start gap-3"
              style={{
@@ -983,6 +990,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button type="button"
+                    onClick={async () => {
+                      setPngBusy(true);
+                      try {
+                        await exportPng(
+                          captureRef.current,
+                          `active-campaign-${activePortfolio?.name ?? "portfolio"}-${todayStamp()}.png`,
+                        );
+                      } finally { setPngBusy(false); }
+                    }}
+                    disabled={pngBusy}
+                    data-testid="acs-export-png"
+                    className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: pngBusy ? "var(--ink-4)" : "var(--ink-2)" }}>
+              {pngBusy ? "…" : "↓"} Export PNG
+            </button>
             <button onClick={() => loadData({ force: true })}
                     disabled={refetching}
                     className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"

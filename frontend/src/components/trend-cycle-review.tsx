@@ -13,14 +13,8 @@ import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { getGroupForHref } from "@/lib/nav";
 import { computeTrendCycles, type TrendCycleLeg } from "@/lib/trend-cycles";
-import { log } from "@/lib/log";
+import { csvEscape, downloadTextFile, exportPng, todayStamp } from "@/lib/page-export";
 import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
-
-function csvEscape(v: unknown): string {
-  if (v == null) return "";
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 /** Download the sorted leg set as CSV. Excel opens the .csv natively —
  *  same "one-file export that spreadsheets consume without a converter"
@@ -53,43 +47,7 @@ function exportCsv(legs: TrendCycleLeg[], portfolio: string): void {
       l.avg_pct_invested.toFixed(1),
     ].map(csvEscape).join(","));
   }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0, 10);
-  a.href = url;
-  a.download = `trend-cycle-review-${portfolio}-${stamp}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/** Snapshot the results container to a PNG file. Uses `html-to-image`
- *  (already in node_modules; same lib the Weekly Retro export uses).
- *  Dynamic import so the module stays out of the initial bundle — the
- *  page renders fast even for operators who never click Export PNG. */
-async function exportPng(node: HTMLElement | null, portfolio: string): Promise<void> {
-  if (!node) return;
-  try {
-    const { toPng } = await import("html-to-image");
-    const dataUrl = await toPng(node, {
-      cacheBust: true,
-      pixelRatio: 2,
-      backgroundColor:
-        getComputedStyle(document.body).getPropertyValue("--bg").trim() || "#f6f7fb",
-    });
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = dataUrl;
-    a.download = `trend-cycle-review-${portfolio}-${stamp}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  } catch (e) {
-    log.error("trend-cycle-review", "PNG export failed", e);
-    alert("PNG export failed — see console.");
-  }
+  downloadTextFile(lines.join("\n"), `trend-cycle-review-${portfolio}-${todayStamp()}.csv`);
 }
 
 const mono = "var(--font-jetbrains), monospace";
@@ -312,8 +270,12 @@ export function TrendCycleReview() {
           <button type="button"
                   onClick={async () => {
                     setPngBusy(true);
-                    try { await exportPng(exportRef.current, getActivePortfolio()); }
-                    finally { setPngBusy(false); }
+                    try {
+                      await exportPng(
+                        exportRef.current,
+                        `trend-cycle-review-${getActivePortfolio()}-${todayStamp()}.png`,
+                      );
+                    } finally { setPngBusy(false); }
                   }}
                   disabled={sorted.length === 0 || pngBusy}
                   data-testid="tcr-export-png"
