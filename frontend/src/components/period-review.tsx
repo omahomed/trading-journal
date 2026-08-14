@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
-import { exportPng, todayStamp } from "@/lib/page-export";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -518,48 +517,8 @@ export function PeriodReview({ navColor, initialTab, onTabConsumed }: { navColor
     { key: "annual", label: "Annual & CAGR" },
   ];
 
-  // Snapshot target for the PNG export — the whole page container so
-  // the download captures header + Capital Deployed + tab bar + tab
-  // content. Uses lib/page-export via dynamic import (same as Trend
-  // Cycle Review / Dashboard / ACS).
-  const captureRef = useRef<HTMLDivElement | null>(null);
-  const [pngBusy, setPngBusy] = useState(false);
-
   return (
-    <div ref={captureRef}>
-      {/* Header — title + Export PNG. Mirrors the Campaign Review /
-          Dashboard header pattern; the wordmark also gives Period
-          Review a page-level anchor the PNG snapshot can include. */}
-      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
-           style={{ borderBottom: "1px solid var(--border)" }}>
-        <div>
-          <h1 className="font-normal text-[32px] tracking-tight m-0"
-              style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-            Period <em className="italic" style={{ color: navColor }}>Review</em>
-          </h1>
-          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-            Weekly, monthly, and annual performance with TWR linking, capital
-            deployed history, and benchmark alpha.
-          </div>
-        </div>
-        <button type="button"
-                onClick={async () => {
-                  setPngBusy(true);
-                  try {
-                    await exportPng(
-                      captureRef.current,
-                      `period-review-${tab}-${getActivePortfolio()}-${todayStamp()}.png`,
-                    );
-                  } finally { setPngBusy(false); }
-                }}
-                disabled={pngBusy}
-                data-testid="pr-export-png"
-                className="shrink-0 px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: pngBusy ? "var(--ink-4)" : "var(--ink-2)" }}>
-          {pngBusy ? "…" : "↓"} Export PNG
-        </button>
-      </div>
-
+    <div>
       {/* Capital Deployed */}
       <CapitalDeployed data={data} />
 

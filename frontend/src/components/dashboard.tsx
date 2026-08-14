@@ -7,7 +7,6 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { computeEnrichedPositions } from "@/lib/positions";
-import { exportPng, todayStamp } from "@/lib/page-export";
 import {
   computeWinRate,
   computeProfitFactor,
@@ -87,12 +86,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
   // Forced calls (mount, portfolio switch) bypass the stale window.
   const lastFetchAtRef = useRef<number>(0);
   const inFlightRef = useRef<boolean>(false);
-  // Snapshot target for the PNG export — the whole slide-up root, so
-  // the download captures header + KPI strip + all sections in one
-  // image. Same "screenshot what I'm looking at" contract as Trend
-  // Cycle Review's Export PNG.
-  const captureRef = useRef<HTMLDivElement | null>(null);
-  const [pngBusy, setPngBusy] = useState(false);
 
   const openCount = openTrades.length;
 
@@ -348,10 +341,10 @@ export function Dashboard({ navColor }: { navColor: string }) {
   ];
 
   return (
-    <div id="dashboard-capture-root" ref={captureRef} style={{ animation: "slide-up 0.18s ease-out" }}>
+    <div id="dashboard-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
       {/* Header */}
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between">
           <div>
             <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
               {greeting}, <em className="italic" style={{ color: navColor }}>MO</em>
@@ -379,25 +372,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
               )}
             </div>
           </div>
-          {/* Export PNG — snapshots the whole capture root (header +
-              KPI strip + all sections). Same helper Trend Cycle Review
-              uses via lib/page-export. */}
-          <button type="button"
-                  onClick={async () => {
-                    setPngBusy(true);
-                    try {
-                      await exportPng(
-                        captureRef.current,
-                        `dashboard-${activePortfolio?.name ?? getActivePortfolio()}-${todayStamp()}.png`,
-                      );
-                    } finally { setPngBusy(false); }
-                  }}
-                  disabled={pngBusy}
-                  data-testid="dashboard-export-png"
-                  className="shrink-0 px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: pngBusy ? "var(--ink-4)" : "var(--ink-2)" }}>
-            {pngBusy ? "…" : "↓"} Export PNG
-          </button>
         </div>
       </div>
 
