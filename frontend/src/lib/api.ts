@@ -2390,6 +2390,14 @@ export interface WeeklyLedgerYtdAvg {
   current_vs_avg_pct: number | null;
 }
 
+/** One entry in the sparkline strip on the stats tiles — the last 4
+ *  complete Mon–Fri weeks + the current in-progress week (is_current). */
+export interface WeeklyLedgerRecentWeek {
+  week_start: string;    // ISO Monday
+  count: number;
+  is_current: boolean;
+}
+
 export interface WeeklyLedgerResponse {
   portfolio: string;
   week_start: string;   // ISO Monday
@@ -2398,6 +2406,7 @@ export interface WeeklyLedgerResponse {
   rows: WeeklyLedgerRow[];
   stats: WeeklyLedgerStats;
   ytd_avg: WeeklyLedgerYtdAvg;
+  recent_weeks: WeeklyLedgerRecentWeek[];
 }
 
 export interface RiskLevelsResponse {

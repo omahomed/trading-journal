@@ -10831,7 +10831,10 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     - timedelta(days=3)).isoformat()  # prior Friday
                 # Same ::date cast as the ledger query above — otherwise
                 # end-of-day fills on the boundary week fall out of the
-                # YTD-avg denominator.
+                # YTD-avg denominator. Widened range to `friday` (this
+                # week's Friday) so a single pass produces both the
+                # YTD-avg denominator (weeks < current) AND the sparkline
+                # tail (last 4 complete weeks + current).
                 cur.execute(
                     """
                     SELECT date_trunc('week', td.date::date)::date AS week,
@@ -10843,10 +10846,16 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                        AND td.deleted_at IS NULL
                        AND EXTRACT(isodow FROM td.date::date) BETWEEN 1 AND 5
                      GROUP BY week
+                     ORDER BY week ASC
                     """,
-                    (portfolio_id, year_start, last_complete_friday),
+                    (portfolio_id, year_start, friday),
                 )
-                weekly_counts = [int(r[1]) for r in cur.fetchall()]
+                all_year_weeks = [(r[0], int(r[1])) for r in cur.fetchall()]
+                # Complete weeks (strictly before this Monday) drive the avg.
+                monday_date_obj = _dt.strptime(monday, "%Y-%m-%d").date()
+                complete_weeks = [w for w in all_year_weeks
+                                  if w[0] < monday_date_obj]
+                weekly_counts = [c for _, c in complete_weeks]
                 if weekly_counts:
                     avg_txns = sum(weekly_counts) / len(weekly_counts)
                     delta_pct = (
@@ -10863,6 +10872,20 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     "current_vs_avg_pct": (
                         round(delta_pct, 1) if delta_pct is not None else None),
                 }
+
+                # Sparkline tail: up to 4 most-recent complete weeks + the
+                # current week (labeled with is_current=true so the frontend
+                # can highlight it). Always includes the current entry even
+                # when zero transactions — the sparkline needs a bar there
+                # so the reader sees "this week vs the prior weeks".
+                recent_complete = complete_weeks[-4:]
+                current_entry = (monday_date_obj, total)
+                recent_weeks = [
+                    {"week_start": w.isoformat(), "count": c,
+                     "is_current": False}
+                    for w, c in recent_complete
+                ] + [{"week_start": monday_date_obj.isoformat(),
+                      "count": total, "is_current": True}]
 
                 # 4. Weekly note. Empty string when unset — never null so
                 # the frontend's autosave input can bind directly.
@@ -10885,6 +10908,7 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
             "rows": ledger,
             "stats": stats,
             "ytd_avg": ytd_avg,
+            "recent_weeks": recent_weeks,
         }
     except Exception as e:
         print(f"[weekly_ledger] handler failed: {e}")

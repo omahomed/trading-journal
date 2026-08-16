@@ -83,7 +83,8 @@ def _match_sql(sql: str) -> str:
     s = " ".join(sql.split())
     if "FROM trades_details td LEFT JOIN trades_summary" in s:
         return "ledger"
-    if "date_trunc('week', td.date)" in s:
+    # Matches both the pre- and post-::date-cast forms of the query.
+    if "date_trunc('week', td.date" in s:
         return "ytd_weekly_counts"
     if "FROM weekly_ledger_notes" in s and "SELECT note" in s:
         return "select_note"
@@ -140,10 +141,13 @@ def _row(detail_id=1, ticker="AAPL", action="BUY", trx_id="B1",
          row_rule="br3.2", realized_pl=None, retro_notes="",
          instrument_type="STOCK", multiplier=1, buy_rule="br3.2",
          sell_rule=None, status="OPEN"):
-    """Shape one ledger tuple in the exact column order the endpoint SELECTs."""
+    """Shape one ledger tuple in the exact column order the endpoint SELECTs.
+    Note: after the lot_closures join was added, realized_pl moved to the
+    LAST position and retro_notes moved up (was interleaved)."""
     return (detail_id, "202608-001", ticker, action, trx_id, day,
-            shares, amount, value, row_rule, realized_pl, retro_notes,
-            instrument_type, multiplier, buy_rule, sell_rule, status)
+            shares, amount, value, row_rule, retro_notes,
+            instrument_type, multiplier, buy_rule, sell_rule, status,
+            realized_pl)
 
 
 # ── GET /api/weekly-ledger — Monday snap ────────────────────────────
@@ -254,18 +258,21 @@ def test_ytd_avg_null_when_no_history(ledger_client):
 # ── Row shape ─────────────────────────────────────────────────────
 
 def test_row_shape_and_price_derivation(ledger_client):
-    """price = value / shares when both are present; falls back to
-    amount/shares otherwise."""
+    """price = td.amount when present (that column IS the per-share price
+    in this schema); amount field on the response is CASH FLOW derived
+    from value + signed by action (BUY = negative, SELL = positive)."""
     ledger_client.state["ledger_rows"] = [
-        _row(detail_id=42, ticker="MSFT", shares=10, amount=-1000, value=1000),
+        _row(detail_id=42, ticker="MSFT", action="BUY",
+             shares=10, amount=100, value=1000),
     ]
     row = ledger_client.get("/api/weekly-ledger",
                             params={"portfolio": "CanSlim",
                                     "week_start": "2026-08-10"}).json()["rows"][0]
     assert row["detail_id"] == 42
     assert row["ticker"] == "MSFT"
-    assert row["price"] == 100.0
+    assert row["price"] == 100.0     # td.amount → per-share price
     assert row["shares"] == 10.0
+    assert row["amount"] == -1000.0  # cash flow: BUY signs value negative
 
 
 # ── Notes ─────────────────────────────────────────────────────────

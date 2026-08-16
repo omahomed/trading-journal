@@ -72,26 +72,73 @@ function fmtWeekRange(monday: string, friday: string): string {
   return `${monStr} – ${friStr}, ${year}`;
 }
 
-// ── KPI tile (matches Campaign Review / Risk Manager) ────────────────
-function KPITile({ label, value, sub, gradient, extraSub }: {
-  label: string; value: string; sub: string; gradient: string;
-  extraSub?: string;
+// ── Quiet stat card with 5-week sparkline ────────────────────────
+// Surface-color card (no gradients), large centered number, subline,
+// and a bar-sparkline at the bottom showing the last 4 complete weeks
+// + the current week. The current-week bar is drawn in navColor to
+// highlight where "now" sits relative to recent history.
+//
+// The optional `accent` prop tints the primary number for the vs-YTD
+// tile — red when the operator is overactive (>15% above avg), green
+// when unusually quiet. Every other tile leaves the number ink-neutral.
+function QuietStatCard({
+  label, value, sub, sparkline, navColor, accent, valueTitle,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  sparkline: { count: number; is_current: boolean }[];
+  navColor: string;
+  accent?: "warn" | "good" | null;
+  valueTitle?: string;
 }) {
+  const maxCount = Math.max(1, ...sparkline.map(w => w.count));
+  const valueColor = accent === "warn" ? "#e5484d"
+                   : accent === "good" ? "#08a86b"
+                   : "var(--ink)";
+
   return (
-    <div className="relative overflow-hidden rounded-[14px] p-[14px_16px] text-white flex flex-col justify-between h-[90px] transition-transform duration-150 hover:scale-[1.01]"
-         style={{ background: gradient, boxShadow: "var(--kpi-shadow)" }}>
-      <div className="absolute -right-5 -top-5 w-[100px] h-[100px] rounded-full"
-           style={{ background: "radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)" }} />
-      <div className="relative z-10">
-        <div className="text-[9px] font-semibold uppercase tracking-[0.10em] opacity-85">{label}</div>
-        <div className="text-[22px] font-semibold tracking-tight mt-0.5 privacy-mask"
-             style={{ fontFamily: mono }}>
+    <div className="rounded-[14px] px-[16px] pt-[14px] pb-[12px] flex flex-col gap-2 min-h-[124px]"
+         style={{
+           background: "var(--surface)",
+           border: "1px solid var(--border)",
+           boxShadow: "var(--card-shadow)",
+         }}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.10em]"
+           style={{ color: "var(--ink-4)" }}>
+        {label}
+      </div>
+      <div className="flex-1 flex flex-col">
+        <div className="text-[28px] font-semibold tracking-tight leading-none privacy-mask"
+             title={valueTitle}
+             style={{ fontFamily: mono, color: valueColor }}>
           {value}
         </div>
+        <div className="text-[11px] mt-1.5 privacy-mask"
+             style={{ color: "var(--ink-3)" }}>
+          {sub}
+        </div>
       </div>
-      <div className="relative z-10 text-[10px] font-medium opacity-80 privacy-mask">
-        {sub}
-        {extraSub && <div className="opacity-90">{extraSub}</div>}
+      {/* 5-week sparkline. SVG at fixed viewBox — width scales with the
+          card. Bars are equal-width; heights normalized to max within the
+          strip so a big current week visibly dominates. Current bar drawn
+          in navColor at full opacity; prior weeks in ink-4 at 45%. */}
+      <div className="flex items-end gap-1 h-[28px] mt-1"
+           title={sparkline.map(w => w.count).join(" · ")}>
+        {sparkline.map((w, i) => {
+          const h = Math.max(2, Math.round((w.count / maxCount) * 28));
+          return (
+            <div key={i}
+                 className="flex-1 rounded-t-[2px]"
+                 style={{
+                   height: `${h}px`,
+                   background: w.is_current ? navColor : "var(--ink-4)",
+                   opacity: w.is_current ? 1 : 0.4,
+                   minWidth: 6,
+                 }}
+                 aria-label={`week ${i + 1}: ${w.count}`} />
+          );
+        })}
       </div>
     </div>
   );
@@ -322,19 +369,17 @@ export function WeeklyLedger({ navColor, initialWeek }: {
     return `${sign}${ytd.current_vs_avg_pct.toFixed(0)}% ${arrow} vs YTD avg ${avg.toFixed(1)}`;
   }, [stats, ytd]);
 
-  // vs-YTD activity tile gradient. Turns red at >15% above the YTD avg
-  // (the "overactivity" cue) — otherwise a neutral slate. This is the
-  // same signal the Transactions tile's delta subline carries; the
-  // tile promotes it to a primary readout so the process-focused stat
-  // sits at the same weight as Transactions itself.
-  const ytdTileGradient = ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15
-    ? "linear-gradient(135deg, #dc2626, #ef4444)"
-    : ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct < -15
-      ? "linear-gradient(135deg, #10b981, #34d399)"
-      : "linear-gradient(135deg, #64748b, #94a3b8)";
+  // vs-YTD accent: red at >15% above YTD avg (overactive), green at
+  // >15% below (unusually quiet), null otherwise. Applied ONLY to the
+  // vs-YTD tile's number so the rest of the strip stays quiet.
+  const ytdAccent: "warn" | "good" | null =
+    ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15 ? "warn"
+    : ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct < -15 ? "good"
+    : null;
   const ytdTileValue = ytd?.current_vs_avg_pct != null
     ? `${ytd.current_vs_avg_pct > 0 ? "+" : ""}${ytd.current_vs_avg_pct.toFixed(0)}%`
     : "—";
+  const sparklineData = data?.recent_weeks ?? [];
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -398,32 +443,34 @@ export function WeeklyLedger({ navColor, initialWeek }: {
         </button>
       </div>
 
-      {/* KPI tiles — 4-across. Focus is process, not money: NET
-          REALIZED (dollars) was dropped because "good trade vs bad
-          trade" is decided by rules + process, not P&L. The delta
-          vs YTD avg — the actual overactivity signal — takes its
-          slot as its own primary tile instead of a subline. */}
+      {/* KPI strip — quiet surface cards, each carries a 5-week
+          sparkline (last 4 complete weeks + current in navColor). No
+          gradients; the vs-YTD tile's number is the only element
+          allowed accent color, and only when the operator is >15% off
+          the YTD avg. Reads calm at rest, alerts only when it matters. */}
       <div className="grid grid-cols-4 gap-[14px] mb-6">
-        <KPITile label="TRANSACTIONS"
-                 value={stats ? String(stats.total_transactions) : "—"}
-                 sub={`${stats?.buys ?? 0} buys · ${stats?.sells ?? 0} sells`}
-                 extraSub={ytdSub}
-                 gradient={ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15
-                   ? "linear-gradient(135deg, #dc2626, #ef4444)"
-                   : "linear-gradient(135deg, #6366f1, #818cf8)"} />
-        <KPITile label="AVG / DAY"
-                 value={stats ? stats.avg_per_day.toFixed(1) : "—"}
-                 sub="Mon–Fri denominator"
-                 gradient="linear-gradient(135deg, #8b5cf6, #a78bfa)" />
-        <KPITile label="UNIQUE TICKERS"
-                 value={stats ? String(stats.unique_tickers) : "—"}
-                 sub="distinct symbols touched"
-                 gradient="linear-gradient(135deg, #f59f00, #fbbf24)" />
-        <KPITile label="VS YTD AVG"
-                 value={ytdTileValue}
-                 sub={`YTD avg ${ytd?.avg_transactions != null ? ytd.avg_transactions.toFixed(1) : "—"}`}
-                 extraSub={ytd?.weeks_counted ? `${ytd.weeks_counted} prior weeks` : undefined}
-                 gradient={ytdTileGradient} />
+        <QuietStatCard label="TRANSACTIONS"
+                       value={stats ? String(stats.total_transactions) : "—"}
+                       sub={`${stats?.buys ?? 0} buys · ${stats?.sells ?? 0} sells`}
+                       sparkline={sparklineData}
+                       navColor={navColor} />
+        <QuietStatCard label="AVG / DAY"
+                       value={stats ? stats.avg_per_day.toFixed(1) : "—"}
+                       sub="Mon–Fri denominator"
+                       sparkline={sparklineData}
+                       navColor={navColor} />
+        <QuietStatCard label="UNIQUE TICKERS"
+                       value={stats ? String(stats.unique_tickers) : "—"}
+                       sub="distinct symbols touched"
+                       sparkline={sparklineData}
+                       navColor={navColor} />
+        <QuietStatCard label="VS YTD AVG"
+                       value={ytdTileValue}
+                       sub={`YTD avg ${ytd?.avg_transactions != null ? ytd.avg_transactions.toFixed(1) : "—"} · ${ytd?.weeks_counted ?? 0} prior wks`}
+                       sparkline={sparklineData}
+                       navColor={navColor}
+                       accent={ytdAccent}
+                       valueTitle={ytdSub} />
       </div>
 
       {/* Weekly Notes card */}
