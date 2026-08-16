@@ -66,6 +66,16 @@ class _FakeCursor:
                 "text": params[0], "detail_id": params[1],
             }
             self._returning = self.state.get("patch_return")
+        elif key == "update_compliant":
+            self.state["patched_compliant"] = {
+                "value": params[0], "detail_id": params[1],
+            }
+            self._returning = self.state.get("compliant_patch_return")
+        elif key == "compliance_weekly_counts":
+            # Migration 070 sparkline query — same year-slice as the
+            # main YTD-avg counts. Tests can stub via "compliance_weeks";
+            # empty by default (all bars unfilled).
+            self._rowset = self.state.get("compliance_weeks", [])
         else:
             raise AssertionError(f"unexpected SQL: {sql[:120]}")
 
@@ -83,7 +93,12 @@ def _match_sql(sql: str) -> str:
     s = " ".join(sql.split())
     if "FROM trades_details td LEFT JOIN trades_summary" in s:
         return "ledger"
-    # Matches both the pre- and post-::date-cast forms of the query.
+    # Compliance sparkline query (migration 070) is also a
+    # date_trunc('week', td.date) grouped SELECT but filters on
+    # `compliant` — must be matched BEFORE the ytd_weekly_counts
+    # regex or it'll be misrouted.
+    if "date_trunc('week', td.date" in s and "compliant" in s:
+        return "compliance_weekly_counts"
     if "date_trunc('week', td.date" in s:
         return "ytd_weekly_counts"
     if "FROM weekly_ledger_notes" in s and "SELECT note" in s:
@@ -92,6 +107,8 @@ def _match_sql(sql: str) -> str:
         return "upsert_note"
     if "UPDATE trades_details" in s and "retro_notes" in s:
         return "update_retro_notes"
+    if "UPDATE trades_details" in s and "compliant" in s:
+        return "update_compliant"
     return "unknown"
 
 
@@ -140,14 +157,14 @@ def _row(detail_id=1, ticker="AAPL", action="BUY", trx_id="B1",
          day=date(2026, 8, 12), shares=100, amount=-15000, value=15000,
          row_rule="br3.2", realized_pl=None, retro_notes="",
          instrument_type="STOCK", multiplier=1, buy_rule="br3.2",
-         sell_rule=None, status="OPEN"):
+         sell_rule=None, status="OPEN", compliant=None):
     """Shape one ledger tuple in the exact column order the endpoint SELECTs.
     Note: after the lot_closures join was added, realized_pl moved to the
-    LAST position and retro_notes moved up (was interleaved)."""
+    LAST position (before compliant); compliant is appended by migration 070."""
     return (detail_id, "202608-001", ticker, action, trx_id, day,
             shares, amount, value, row_rule, retro_notes,
             instrument_type, multiplier, buy_rule, sell_rule, status,
-            realized_pl)
+            realized_pl, compliant)
 
 
 # ── GET /api/weekly-ledger — Monday snap ────────────────────────────
@@ -329,4 +346,58 @@ def test_patch_retro_notes_404_when_row_missing(ledger_client):
     ledger_client.state["patch_return"] = None
     r = ledger_client.patch("/api/trades/details/99/retro-notes",
                             json={"retro_notes": "x"})
+    assert r.status_code == 404
+
+
+# ── Compliance stats + PATCH (migration 070) ─────────────────────
+
+def test_compliance_stats_from_ledger(ledger_client):
+    """compliance_pct = compliant_count / graded_count × 100. Ungraded
+    rows don't drag the denominator; when nothing is graded the % is
+    null (frontend renders '—')."""
+    ledger_client.state["ledger_rows"] = [
+        _row(detail_id=1, compliant=True),
+        _row(detail_id=2, compliant=True),
+        _row(detail_id=3, compliant=False),
+        _row(detail_id=4, compliant=None),   # ungraded — not in denominator
+        _row(detail_id=5, compliant=None),
+    ]
+    d = ledger_client.get("/api/weekly-ledger",
+                          params={"portfolio": "CanSlim",
+                                  "week_start": "2026-08-10"}).json()
+    stats = d["stats"]
+    assert stats["graded_count"] == 3
+    assert stats["compliant_count"] == 2
+    # 2 of 3 = 66.7%
+    assert stats["compliance_pct"] == 66.7
+
+
+def test_compliance_pct_null_when_no_graded_rows(ledger_client):
+    ledger_client.state["ledger_rows"] = [_row(compliant=None)]
+    stats = ledger_client.get("/api/weekly-ledger",
+                              params={"portfolio": "CanSlim",
+                                      "week_start": "2026-08-10"}).json()["stats"]
+    assert stats["graded_count"] == 0
+    assert stats["compliance_pct"] is None
+
+
+def test_patch_compliant_accepts_true_false_null(ledger_client):
+    for target in [True, False, None]:
+        ledger_client.state["compliant_patch_return"] = (7, target)
+        r = ledger_client.patch("/api/trades/details/7/compliant",
+                                json={"compliant": target})
+        assert r.status_code == 200, f"target={target}"
+        assert r.json()["compliant"] is target
+
+
+def test_patch_compliant_rejects_non_boolean(ledger_client):
+    r = ledger_client.patch("/api/trades/details/7/compliant",
+                            json={"compliant": "yes"})
+    assert r.status_code == 422
+
+
+def test_patch_compliant_404_when_row_missing(ledger_client):
+    ledger_client.state["compliant_patch_return"] = None
+    r = ledger_client.patch("/api/trades/details/99/compliant",
+                            json={"compliant": True})
     assert r.status_code == 404

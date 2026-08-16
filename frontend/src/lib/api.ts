@@ -1743,6 +1743,15 @@ export const api = {
       { id: number; retro_notes: string } | { error: string }
     >,
 
+  patchTradeDetailCompliant: (detailId: number, compliant: boolean | null) =>
+    fetchWithAuth(`${API_BASE}/api/trades/details/${detailId}/compliant`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ compliant }),
+    }).then(r => r.json()) as Promise<
+      { id: number; compliant: boolean | null } | { error: string }
+    >,
+
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
@@ -2373,6 +2382,9 @@ export interface WeeklyLedgerRow {
   buy_rule: string | null;
   sell_rule: string | null;
   campaign_status: "OPEN" | "CLOSED" | null;
+  /** Migration 070 — per-row rule adherence. NULL = ungraded,
+   *  true = followed process, false = broke rule. */
+  compliant: boolean | null;
 }
 
 export interface WeeklyLedgerStats {
@@ -2382,6 +2394,11 @@ export interface WeeklyLedgerStats {
   unique_tickers: number;
   net_realized: number;
   avg_per_day: number;
+  /** Migration 070 — compliance stats. `compliance_pct` is null when
+   *  `graded_count === 0` (no basis for %); frontend renders "—". */
+  graded_count: number;
+  compliant_count: number;
+  compliance_pct: number | null;
 }
 
 export interface WeeklyLedgerYtdAvg {
@@ -2398,6 +2415,16 @@ export interface WeeklyLedgerRecentWeek {
   is_current: boolean;
 }
 
+/** One entry in the compliance-% sparkline (migration 070). Same
+ *  week alignment as `WeeklyLedgerRecentWeek`. `compliance_pct` is
+ *  null when the week had no graded rows. */
+export interface WeeklyLedgerRecentCompliance {
+  week_start: string;
+  compliance_pct: number | null;
+  graded: number;
+  is_current: boolean;
+}
+
 export interface WeeklyLedgerResponse {
   portfolio: string;
   week_start: string;   // ISO Monday
@@ -2407,6 +2434,7 @@ export interface WeeklyLedgerResponse {
   stats: WeeklyLedgerStats;
   ytd_avg: WeeklyLedgerYtdAvg;
   recent_weeks: WeeklyLedgerRecentWeek[];
+  recent_compliance: WeeklyLedgerRecentCompliance[];
 }
 
 export interface RiskLevelsResponse {

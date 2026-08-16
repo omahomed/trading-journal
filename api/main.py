@@ -10731,6 +10731,9 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 # A SELL detail can match multiple buys → sum the row's
                 # closures grouped by (trade_id, sell_trx_id). BUY rows
                 # return null so the frontend renders "—".
+                #
+                # td.compliant (migration 070): boolean, NULL = ungraded.
+                # Drives the compliance-% tile + per-row Y/N toggle chip.
                 cur.execute(
                     """
                     SELECT td.id, td.trade_id, td.ticker, td.action, td.trx_id,
@@ -10744,7 +10747,8 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                                 WHERE lc.portfolio_id = td.portfolio_id
                                   AND lc.trade_id     = td.trade_id
                                   AND lc.sell_trx_id  = td.trx_id
-                           ) ELSE NULL END AS realized_pl_signed
+                           ) ELSE NULL END AS realized_pl_signed,
+                           td.compliant
                       FROM trades_details td
                       LEFT JOIN trades_summary ts
                              ON ts.trade_id = td.trade_id
@@ -10763,7 +10767,7 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     (detail_id, trade_id, ticker, action, trx_id, date_d,
                      shares, price_per_share, value, row_rule, retro_notes,
                      instrument_type, multiplier, buy_rule, sell_rule,
-                     campaign_status, realized_pl) = r
+                     campaign_status, realized_pl, compliant) = r
                     # td.amount is PRICE PER SHARE (not a dollar amount).
                     # td.value is the total dollar figure (shares × price
                     # × multiplier for options — importer already folds
@@ -10799,6 +10803,8 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                         "buy_rule": buy_rule,
                         "sell_rule": sell_rule,
                         "campaign_status": campaign_status,
+                        # migration 070 — nullable; frontend cycles NULL → true → false → NULL
+                        "compliant": bool(compliant) if compliant is not None else None,
                     })
 
                 # 2. Stats. Buys/sells split, unique tickers, net realized
@@ -10811,6 +10817,16 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     if r["action"] == "SELL" and r["realized_pl"] is not None
                 )
                 total = len(ledger)
+                # Compliance stats — migration 070. Ungraded rows don't
+                # count in the denominator, so a fresh week starts at
+                # "0 of N graded" with no compliance % (renders "—")
+                # rather than silently 100% or 0%.
+                graded = sum(1 for r in ledger if r["compliant"] is not None)
+                compliant_yes = sum(1 for r in ledger if r["compliant"] is True)
+                compliance_pct = (
+                    round((compliant_yes / graded) * 100.0, 1)
+                    if graded > 0 else None
+                )
                 stats = {
                     "total_transactions": total,
                     "buys": buys,
@@ -10818,6 +10834,9 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     "unique_tickers": len(tickers),
                     "net_realized": round(net_realized, 2),
                     "avg_per_day": round(total / 5.0, 2),
+                    "graded_count": graded,
+                    "compliant_count": compliant_yes,
+                    "compliance_pct": compliance_pct,
                 }
 
                 # 3. YTD average benchmark. Weekly transaction count from
@@ -10887,6 +10906,42 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 ] + [{"week_start": monday_date_obj.isoformat(),
                       "count": total, "is_current": True}]
 
+                # Weekly compliance % sparkline — parallel to recent_weeks.
+                # Query per-week (graded, compliant) counts across the same
+                # date range so a single pass can build the strip for the
+                # Compliance tile. Percentage is null when a week had no
+                # graded rows (unfilled bars in the sparkline).
+                cur.execute(
+                    """
+                    SELECT date_trunc('week', td.date::date)::date AS week,
+                           COUNT(*) FILTER (WHERE td.compliant IS NOT NULL) AS graded,
+                           COUNT(*) FILTER (WHERE td.compliant = TRUE) AS good
+                      FROM trades_details td
+                     WHERE td.portfolio_id = %s
+                       AND td.date::date >= %s
+                       AND td.date::date <= %s
+                       AND td.deleted_at IS NULL
+                       AND EXTRACT(isodow FROM td.date::date) BETWEEN 1 AND 5
+                     GROUP BY week
+                     ORDER BY week ASC
+                    """,
+                    (portfolio_id, year_start, friday),
+                )
+                by_week: dict = {r[0]: (int(r[1]), int(r[2])) for r in cur.fetchall()}
+                def _pct(w):
+                    g, y = by_week.get(w, (0, 0))
+                    return round((y / g) * 100.0, 1) if g > 0 else None
+                recent_compliance = [
+                    {"week_start": w.isoformat(),
+                     "compliance_pct": _pct(w),
+                     "graded": by_week.get(w, (0, 0))[0],
+                     "is_current": False}
+                    for w, _ in recent_complete
+                ] + [{"week_start": monday_date_obj.isoformat(),
+                      "compliance_pct": compliance_pct,
+                      "graded": graded,
+                      "is_current": True}]
+
                 # 4. Weekly note. Empty string when unset — never null so
                 # the frontend's autosave input can bind directly.
                 cur.execute(
@@ -10909,6 +10964,7 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
             "stats": stats,
             "ytd_avg": ytd_avg,
             "recent_weeks": recent_weeks,
+            "recent_compliance": recent_compliance,
         }
     except Exception as e:
         print(f"[weekly_ledger] handler failed: {e}")
@@ -10960,6 +11016,43 @@ def put_weekly_ledger_note(body: dict = Body(...)):
         }
     except Exception as e:
         print(f"[put_weekly_ledger_note] failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.patch("/api/trades/details/{detail_id}/compliant")
+def patch_trade_detail_compliant(detail_id: int, body: dict = Body(...)):
+    """Set the per-row compliance flag. Body: {compliant: bool | null}.
+    NULL = ungraded, TRUE = followed process, FALSE = broke rule. RLS
+    scopes by user; a caller trying to edit another user's row hits
+    zero rows updated → 404."""
+    try:
+        raw = body.get("compliant", None)
+        if raw is None:
+            val = None
+        elif isinstance(raw, bool):
+            val = raw
+        else:
+            return JSONResponse(status_code=422, content={
+                "error": "compliant must be a boolean or null"})
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE trades_details
+                       SET compliant = %s
+                     WHERE id = %s AND deleted_at IS NULL
+                    RETURNING id, compliant
+                    """,
+                    (val, detail_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return JSONResponse(status_code=404, content={
+                        "error": "trade_detail not found"})
+                conn.commit()
+        return {"id": row[0], "compliant": row[1]}
+    except Exception as e:
+        print(f"[patch_trade_detail_compliant] {detail_id}: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 

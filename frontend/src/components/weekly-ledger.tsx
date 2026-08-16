@@ -145,6 +145,55 @@ function QuietStatCard({
   );
 }
 
+// ── Per-row compliance toggle chip. Cycles NULL → Y → N → NULL on
+//    click. Optimistic update with revert-on-error. Uses the PATCH
+//    endpoint so the change persists per detail row.
+function ComplianceChip({ detailId, initial, onChange }: {
+  detailId: number; initial: boolean | null; onChange: (v: boolean | null) => void;
+}) {
+  const [value, setValue] = useState<boolean | null>(initial);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setValue(initial); }, [initial, detailId]);
+
+  const next = (v: boolean | null): boolean | null =>
+    v === null ? true : v === true ? false : null;
+
+  const commit = useCallback(async (target: boolean | null) => {
+    const before = value;
+    setValue(target);          // optimistic
+    setSaving(true);
+    try {
+      const r = await api.patchTradeDetailCompliant(detailId, target);
+      if (r && "error" in r) throw new Error(r.error);
+      onChange(target);
+    } catch (e) {
+      setValue(before);
+      log.error("weekly-ledger", "compliant save failed", e);
+    } finally {
+      setSaving(false);
+    }
+  }, [detailId, value, onChange]);
+
+  const label = value === true ? "✓" : value === false ? "✗" : "—";
+  const bg = value === true
+    ? "color-mix(in oklab, #08a86b 18%, var(--surface))"
+    : value === false
+      ? "color-mix(in oklab, #e5484d 18%, var(--surface))"
+      : "var(--bg-2)";
+  const fg = value === true ? "#08a86b" : value === false ? "#e5484d" : "var(--ink-4)";
+
+  return (
+    <button type="button" onClick={() => commit(next(value))} disabled={saving}
+            className="inline-flex items-center justify-center w-[32px] h-[24px] rounded-[6px] text-[13px] font-bold transition-all"
+            title={value === true ? "Followed process — click to mark break"
+                 : value === false ? "Broke rule — click to reset"
+                 : "Ungraded — click to mark followed"}
+            style={{ background: bg, color: fg, border: "1px solid var(--border)" }}>
+      {label}
+    </button>
+  );
+}
+
 // ── Inline retro_notes editor. Textarea auto-grows; blur triggers save.
 function ExitNotesCell({ detailId, initial, action }: {
   detailId: number; initial: string; action: "BUY" | "SELL";
@@ -381,6 +430,30 @@ export function WeeklyLedger({ navColor, initialWeek }: {
     ? `${ytd.current_vs_avg_pct > 0 ? "+" : ""}${ytd.current_vs_avg_pct.toFixed(0)}%`
     : "—";
   const sparklineData = data?.recent_weeks ?? [];
+  // Compliance sparkline uses a parallel weekly-compliance-% series.
+  // Each entry carries compliance_pct (may be null when the week had
+  // no graded rows). Map to the same shape the sparkline reads.
+  const complianceSparkline = useMemo(
+    () => (data?.recent_compliance ?? []).map(w => ({
+      count: w.compliance_pct ?? 0,
+      is_current: w.is_current,
+    })),
+    [data],
+  );
+  const complianceValue = stats?.compliance_pct != null
+    ? `${stats.compliance_pct.toFixed(0)}%`
+    : "—";
+  const complianceSub = stats
+    ? `${stats.compliant_count} of ${stats.graded_count} graded${stats.graded_count < stats.total_transactions ? ` · ${stats.total_transactions - stats.graded_count} pending` : ""}`
+    : "no data";
+  // Accent the number when compliance drops below 80% (broke process on
+  // >1 in 5 decisions). Above 95% earns the green — a genuinely clean
+  // week. Undecided middle stays neutral so accent means something.
+  const complianceAccent: "warn" | "good" | null =
+    stats?.compliance_pct == null ? null
+    : stats.compliance_pct < 80 ? "warn"
+    : stats.compliance_pct >= 95 ? "good"
+    : null;
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -445,16 +518,22 @@ export function WeeklyLedger({ navColor, initialWeek }: {
       </div>
 
       {/* KPI strip — quiet surface cards, each carries a 5-week
-          sparkline (last 4 complete weeks + current in navColor). No
-          gradients; the vs-YTD tile's number is the only element
-          allowed accent color, and only when the operator is >15% off
-          the YTD avg. Reads calm at rest, alerts only when it matters. */}
-      <div className="grid grid-cols-4 gap-[14px] mb-6">
+          sparkline. No gradients; only two tiles ever accent their
+          number: VS YTD AVG when the operator is >15% off avg, and
+          COMPLIANCE when adherence drops below 80% (or rises above
+          95%). Reads calm at rest, alerts only when it matters. */}
+      <div className="grid grid-cols-5 gap-[14px] mb-6">
         <QuietStatCard label="TRANSACTIONS"
                        value={stats ? String(stats.total_transactions) : "—"}
                        sub={`${stats?.buys ?? 0} buys · ${stats?.sells ?? 0} sells`}
                        sparkline={sparklineData}
                        navColor={navColor} />
+        <QuietStatCard label="COMPLIANCE"
+                       value={complianceValue}
+                       sub={complianceSub}
+                       sparkline={complianceSparkline}
+                       navColor={navColor}
+                       accent={complianceAccent} />
         <QuietStatCard label="AVG / DAY"
                        value={stats ? stats.avg_per_day.toFixed(1) : "—"}
                        sub="Mon–Fri denominator"
@@ -551,6 +630,7 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                   { l: "Price", a: "right" },
                   { l: "Amount", a: "right" },
                   { l: "Realized", a: "right" },
+                  { l: "OK?", a: "center" },
                   { l: "Buy Rule", a: "left" },
                   { l: "Sell Rule", a: "left" },
                   { l: "Lesson", a: "left" },
@@ -561,7 +641,7 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                       style={{
                         color: "var(--ink-4)",
                         borderBottom: "1px solid var(--border)",
-                        textAlign: c.a as "left" | "right",
+                        textAlign: c.a as "left" | "right" | "center",
                         whiteSpace: "nowrap",
                       }}>
                     {c.l}
@@ -572,14 +652,14 @@ export function WeeklyLedger({ navColor, initialWeek }: {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={12} className="px-3 py-8 text-center text-[12px]"
+                  <td colSpan={13} className="px-3 py-8 text-center text-[12px]"
                       style={{ color: "var(--ink-4)" }}>
                     Loading…
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-3 py-8 text-center text-[12px]"
+                  <td colSpan={13} className="px-3 py-8 text-center text-[12px]"
                       style={{ color: "var(--ink-4)" }}>
                     {filterActive
                       ? "No transactions match the current filter."
@@ -630,6 +710,15 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                     </td>
                     <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: r.realized_pl == null ? "var(--ink-4)" : r.realized_pl >= 0 ? "#08a86b" : "#e5484d" }}>
                       {r.realized_pl != null ? formatCurrency(r.realized_pl, { decimals: 0, showSign: true }) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <ComplianceChip detailId={r.detail_id} initial={r.compliant}
+                                      onChange={v => setData(prev => prev ? {
+                                        ...prev,
+                                        rows: prev.rows.map(row =>
+                                          row.detail_id === r.detail_id
+                                            ? { ...row, compliant: v } : row),
+                                      } : prev)} />
                     </td>
                     <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.buy_rule || "—"}</td>
                     <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.sell_rule || "—"}</td>
