@@ -100,6 +100,19 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
   const [quickLogResult, setQuickLogResult] = useState<{ row: number; ok: boolean; msg: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  // Per-row selection for the "Combine selected" action. Backend now
+  // returns one row per distinct order (partial fills within an order
+  // still merge by order_id). If the user made two SEPARATE decisions
+  // on the same ticker/side/day and wants them treated as one, they
+  // check both rows and hit Combine — client-side merge into a
+  // share-weighted-avg row. Same-day day-trade cycles no longer get
+  // auto-collapsed against the user's intent.
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const toggleRow = (i: number) => setSelectedRows(prev => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
 
   const loadContext = async () => {
     const [details, open] = await Promise.all([
@@ -139,6 +152,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
         setError(result.error);
       } else {
         setExecutions((result.trades || []) as Trade[]);
+        setSelectedRows(new Set());   // fresh pull → clear checked rows
         setMessage(result.count === 0 ? (result.message || "No trades found") : `Pulled ${result.count} execution(s) from IBKR`);
       }
     } catch (e: any) {
@@ -148,6 +162,77 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
     }
     await loadContext();
   };
+
+  // Combine selected rows into one share-weighted-avg execution.
+  // Preconditions (checked here + in the UI's enabled state):
+  //   * ≥2 rows selected
+  //   * all share the same trade_date, action, symbol (+ option contract
+  //     fields when applicable). Mixing a BUY with a SELL — or two
+  //     different strikes on the same underlying — would produce a
+  //     nonsense average, so we block it.
+  // Merged row keeps the EARLIEST order_time (when the trader first
+  // committed) and a comma-joined order_id so the merge stays traceable.
+  const combineSelected = () => {
+    if (selectedRows.size < 2) return;
+    const picked = [...selectedRows].sort((a, b) => a - b).map(i => executions[i]);
+    // Shared-key validation. bail with an inline error if the picks
+    // aren't legally combinable.
+    const key = (t: Trade) => [
+      t.trade_date, t.symbol, t.action, isOption(t) ? "OPT" : "STK",
+      t.put_call || "", t.strike || "", t.expiry || "",
+    ].join("|");
+    const keys = new Set(picked.map(key));
+    if (keys.size !== 1) {
+      setError("Only rows with the same date + ticker + side can be combined.");
+      return;
+    }
+    setError("");
+    const totalQty = picked.reduce((s, t) => s + t.quantity, 0);
+    const totalValue = picked.reduce((s, t) => s + t.quantity * t.price, 0);
+    const merged: Trade = {
+      ...picked[0],
+      quantity: totalQty,
+      price: totalValue / totalQty,
+      amount: picked.reduce((s, t) => s + t.amount, 0),
+      commission: picked.reduce((s, t) => s + t.commission, 0),
+      net_cash: picked.reduce((s, t) => s + t.net_cash, 0),
+      order_time: picked.reduce((min, t) =>
+        !min || (t.order_time && t.order_time < min) ? t.order_time : min,
+        "" as string),
+      order_id: picked.map(t => t.order_id || "").filter(Boolean).join(","),
+    };
+    // Replace picked rows with one merged row at the position of the
+    // FIRST picked row. Preserves the surrounding order so the merged
+    // row shows up where the earliest selection was.
+    const indicesSet = selectedRows;
+    const firstIdx = Math.min(...indicesSet);
+    const next = executions.reduce<Trade[]>((acc, t, i) => {
+      if (indicesSet.has(i)) {
+        if (i === firstIdx) acc.push(merged);
+        // skip other selected rows
+      } else {
+        acc.push(t);
+      }
+      return acc;
+    }, []);
+    setExecutions(next);
+    setSelectedRows(new Set());
+    setMessage(`Combined ${picked.length} rows into 1 · ${merged.symbol} ${merged.action} ${totalQty} @ $${(totalValue / totalQty).toFixed(4)}`);
+  };
+
+  // Enabled iff exactly-combinable set is selected. Same predicate the
+  // handler uses — surfacing it lets the button disable itself instead
+  // of throwing an inline error the user might miss.
+  const combineEligible = useMemo(() => {
+    if (selectedRows.size < 2) return false;
+    const picked = [...selectedRows].map(i => executions[i]).filter(Boolean);
+    if (picked.length < 2) return false;
+    const key = (t: Trade) => [
+      t.trade_date, t.symbol, t.action, isOption(t) ? "OPT" : "STK",
+      t.put_call || "", t.strike || "", t.expiry || "",
+    ].join("|");
+    return new Set(picked.map(key)).size === 1;
+  }, [selectedRows, executions]);
 
   // Heuristic duplicate detection: same trade_date + symbol + action + quantity
   // already present in trades_details. Close-enough match on the common case.
@@ -466,11 +551,38 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             <span className="text-[13px] font-semibold">Stock Executions</span>
             <span className="text-xs" style={{ color: "var(--ink-4)" }}>{stockRows.length} rows</span>
+            {/* Combine-selected action. Sits inline with the table
+                header so it's obvious when the checkboxes are meaningful.
+                Disabled state carries a tooltip explaining why. */}
+            <div className="ml-auto flex items-center gap-2">
+              {selectedRows.size > 0 && (
+                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                  {selectedRows.size} selected
+                </span>
+              )}
+              <button onClick={combineSelected}
+                      disabled={!combineEligible}
+                      title={combineEligible
+                        ? "Merge selected rows into one share-weighted-avg execution"
+                        : "Pick 2+ rows with the same date, ticker, and side"}
+                      className="px-2.5 py-1 rounded text-[11px] font-semibold transition-all"
+                      style={{
+                        background: combineEligible ? navColor : "var(--bg-2)",
+                        color: combineEligible ? "#fff" : "var(--ink-4)",
+                        border: `1px solid ${combineEligible ? navColor : "var(--border)"}`,
+                        cursor: combineEligible ? "pointer" : "not-allowed",
+                      }}>
+                Combine selected
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr>
+                  <th className="w-8 px-2 py-2.5"
+                      style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}
+                      aria-label="select" />
                   {["Time", "Symbol", "Action", "Qty", "Price", "Amount", "Comm.", "Net", "Actions"].map(h => (
                     <th key={h} className="text-left text-[10px] uppercase tracking-[0.08em] font-semibold px-3 py-2.5 whitespace-nowrap"
                         style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
@@ -486,7 +598,18 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                   const quickOpen = quickLogRow === i;
                   return (
                     <>
-                      <tr key={i} style={{ background: dup ? "color-mix(in oklab, #f59f00 8%, var(--surface))" : undefined }}>
+                      <tr key={i} style={{
+                        background: selectedRows.has(i)
+                          ? "color-mix(in oklab, currentColor 4%, var(--surface))"
+                          : dup ? "color-mix(in oklab, #f59f00 8%, var(--surface))" : undefined
+                      }}>
+                        <td className="px-2 py-2.5 text-center" style={{ width: 32 }}>
+                          <input type="checkbox"
+                                 checked={selectedRows.has(i)}
+                                 onChange={() => toggleRow(i)}
+                                 aria-label={`Select ${t.symbol} ${t.action} ${t.quantity}`}
+                                 style={{ cursor: "pointer", accentColor: navColor }} />
+                        </td>
                         <td className="px-3 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 11 }}>{t.order_time}</td>
                         <td className="px-3 py-2.5 font-semibold">
                           {t.symbol}
@@ -530,7 +653,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                       </tr>
                       {rowResult && (
                         <tr>
-                          <td colSpan={9} className="px-3 py-2 text-[11px]"
+                          <td colSpan={10} className="px-3 py-2 text-[11px]"
                               style={{ background: rowResult.ok ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #e5484d 10%, var(--surface))",
                                        color: rowResult.ok ? "#08a86b" : "#e5484d" }}>
                             {rowResult.ok ? "✓" : "✗"} {rowResult.msg}
@@ -539,7 +662,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                       )}
                       {quickOpen && (
                         <tr>
-                          <td colSpan={9} style={{ background: "var(--bg)", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
+                          <td colSpan={10} style={{ background: "var(--bg)", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
                             <div className="p-4 flex flex-wrap items-end gap-3">
                               {t.action === "BUY" && (
                                 <div className="flex flex-col gap-1">

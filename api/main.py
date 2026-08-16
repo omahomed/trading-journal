@@ -7105,10 +7105,25 @@ def drift_scan_endpoint(
 @app.post("/api/trades/import")
 @limiter.limit("3/minute")
 def import_ibkr_trades(request: Request):
-    """Pull today's trade confirmations from IBKR Flex Query."""
+    """Pull today's trade confirmations from IBKR Flex Query.
+
+    consolidate=True merges partial fills (same order_id) into one row —
+    always correct; a 5,000-share market order that fills in 3 chunks is
+    logically one execution.
+
+    group_same_day=False (was True) keeps DISTINCT orders on the same
+    ticker/side as SEPARATE rows. Auto-merging them silently collapsed
+    day-trade cycles (BUY 200 @ 9:30 + BUY 200 @ 14:00 became one row
+    with a weighted-avg price), which corrupted the Weekly Ledger view
+    and hid multi-decision days. The Import Trades UI offers a
+    "Combine selected" affordance so the user can still merge two rows
+    into one when they DO represent a single logical decision — but the
+    default is 1-row-per-order so nothing collapses without consent.
+    """
     try:
         import ibkr_flex
-        df, debug, err = ibkr_flex.pull_ibkr_trades(consolidate=True)
+        df, debug, err = ibkr_flex.pull_ibkr_trades(
+            consolidate=True, group_same_day=False)
         if err:
             return {"error": err, "debug": debug or {}}
         if df.empty:
