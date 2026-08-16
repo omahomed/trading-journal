@@ -577,7 +577,11 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                     <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>
                       {r.price != null ? formatCurrency(r.price, { decimals: 2 }) : "—"}
                     </td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: r.amount != null && r.amount >= 0 ? "#08a86b" : "var(--ink-3)" }}>
+                    {/* Amount is CASH FLOW, not P&L. Neutral color so
+                        a SELL at a loss doesn't read green just because
+                        cash came in. Sign carries the direction: BUY
+                        negative (cash out), SELL positive (cash in). */}
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
                       {r.amount != null ? formatCurrency(r.amount, { decimals: 0, showSign: true }) : "—"}
                     </td>
                     <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.buy_rule || "—"}</td>

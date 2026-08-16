@@ -10724,13 +10724,27 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 # `td.date <= 'YYYY-MM-DD'` compares against midnight of
                 # that day and silently drops every intra-day fill on
                 # Friday. Cast to ::date so the range is day-precision.
+                #
+                # Row-level realized_pl comes from lot_closures (not
+                # td.realized_pl — that column is 0 on details from the
+                # importer path; the LIFO closures own the real P&L).
+                # A SELL detail can match multiple buys → sum the row's
+                # closures grouped by (trade_id, sell_trx_id). BUY rows
+                # return null so the frontend renders "—".
                 cur.execute(
                     """
                     SELECT td.id, td.trade_id, td.ticker, td.action, td.trx_id,
                            td.date::date, td.shares, td.amount, td.value,
-                           td.rule AS row_rule, td.realized_pl, td.retro_notes,
+                           td.rule AS row_rule, td.retro_notes,
                            td.instrument_type, td.multiplier,
-                           ts.rule AS buy_rule, ts.sell_rule, ts.status
+                           ts.rule AS buy_rule, ts.sell_rule, ts.status,
+                           CASE WHEN UPPER(td.action) = 'SELL' THEN (
+                               SELECT COALESCE(SUM(lc.realized_pl), 0)
+                                 FROM lot_closures lc
+                                WHERE lc.portfolio_id = td.portfolio_id
+                                  AND lc.trade_id     = td.trade_id
+                                  AND lc.sell_trx_id  = td.trx_id
+                           ) ELSE NULL END AS realized_pl_signed
                       FROM trades_details td
                       LEFT JOIN trades_summary ts
                              ON ts.trade_id = td.trade_id
@@ -10747,27 +10761,35 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 ledger = []
                 for r in cur.fetchall():
                     (detail_id, trade_id, ticker, action, trx_id, date_d,
-                     shares, amount, value, row_rule, realized_pl, retro_notes,
+                     shares, price_per_share, value, row_rule, retro_notes,
                      instrument_type, multiplier, buy_rule, sell_rule,
-                     campaign_status) = r
-                    # Per-row price: value / shares if both known; falls
-                    # back to amount / shares. Floats OK — display only.
+                     campaign_status, realized_pl) = r
+                    # td.amount is PRICE PER SHARE (not a dollar amount).
+                    # td.value is the total dollar figure (shares × price
+                    # × multiplier for options — importer already folds
+                    # multiplier in). Unsigned in the DB; we sign it by
+                    # action so the ledger reads as a cash-flow column:
+                    #   BUY  → negative (cash out)
+                    #   SELL → positive (cash in)
                     shares_f = float(shares or 0)
-                    price = None
-                    if shares_f > 0 and value is not None:
-                        price = round(float(value) / shares_f, 4)
-                    elif shares_f > 0 and amount is not None:
-                        price = round(abs(float(amount)) / shares_f, 4)
+                    action_upper = (action or "").upper()
+                    price = (float(price_per_share) if price_per_share is not None
+                             else (round(float(value) / shares_f, 4)
+                                   if shares_f > 0 and value is not None else None))
+                    value_abs = float(value) if value is not None else None
+                    amount_signed = None
+                    if value_abs is not None:
+                        amount_signed = -abs(value_abs) if action_upper == "BUY" else abs(value_abs)
                     ledger.append({
                         "detail_id": detail_id,
                         "trade_id": trade_id,
                         "ticker": ticker,
-                        "action": (action or "").upper(),
+                        "action": action_upper,
                         "trx_id": trx_id,
                         "date": date_d.isoformat() if date_d else None,
                         "shares": shares_f,
                         "price": price,
-                        "amount": float(amount) if amount is not None else None,
+                        "amount": amount_signed,
                         "row_rule": row_rule,
                         "realized_pl": (
                             float(realized_pl) if realized_pl is not None else None),
