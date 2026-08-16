@@ -229,6 +229,11 @@ export function WeeklyLedger({ navColor, initialWeek }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: WeeklyLedgerRow } | null>(null);
+  // Filters applied CLIENT-SIDE against the already-fetched week. Backend
+  // stats stay week-scoped (they're the "am I overtrading" signal); the
+  // table + a small filtered-count badge reflect the current filter.
+  const [dayFilter, setDayFilter] = useState<"all" | "mon" | "tue" | "wed" | "thu" | "fri">("all");
+  const [tickerFilter, setTickerFilter] = useState<string>("all");
 
   const portfolio = getActivePortfolio();
 
@@ -268,7 +273,42 @@ export function WeeklyLedger({ navColor, initialWeek }: {
 
   const stats = data?.stats;
   const ytd = data?.ytd_avg;
-  const rows = data?.rows ?? [];
+  const allRows = data?.rows ?? [];
+
+  // Reset filters when the week changes so a lingering "TSLA" filter
+  // from last week doesn't blank out a fresh week that has no TSLA.
+  useEffect(() => {
+    setDayFilter("all");
+    setTickerFilter("all");
+  }, [weekStart]);
+
+  // Ticker options from THIS week's data — sorted alphabetically.
+  // Deduped Set → sorted array.
+  const tickerOptions = useMemo(
+    () => Array.from(new Set(allRows.map(r => r.ticker).filter(Boolean))).sort(),
+    [allRows],
+  );
+
+  // Client-side filtered rows. Day filter maps M/T/W/Th/F to
+  // getDay() 1..5 (parsed via YYYY-MM-DD split — no UTC parse).
+  const dayIndex: Record<string, number> = {
+    mon: 1, tue: 2, wed: 3, thu: 4, fri: 5,
+  };
+  const rows = useMemo(() => {
+    return allRows.filter(r => {
+      if (tickerFilter !== "all" && r.ticker !== tickerFilter) return false;
+      if (dayFilter !== "all") {
+        if (!r.date) return false;
+        const [y, m, d] = r.date.split("-").map(Number);
+        const jsDay = new Date(y, m - 1, d).getDay();  // Sun=0..Sat=6
+        const target = dayIndex[dayFilter];
+        if (jsDay !== target) return false;
+      }
+      return true;
+    });
+  }, [allRows, dayFilter, tickerFilter]);
+
+  const filterActive = dayFilter !== "all" || tickerFilter !== "all";
 
   // ── YTD delta chip subline for the Transactions KPI ─────────────
   const ytdSub = useMemo(() => {
@@ -350,16 +390,22 @@ export function WeeklyLedger({ navColor, initialWeek }: {
         </button>
       </div>
 
-      {/* KPI tiles */}
-      <div className="grid grid-cols-5 gap-[14px] mb-6">
+      {/* KPI tiles — 4-across, single-line subs so text isn't crammed.
+          Prior 5-tile layout had a redundant "Activity" tile that
+          echoed the Transactions delta chip verbatim; consolidated
+          into a single tile whose gradient turns red at >15% over
+          YTD avg (the "overactivity" cue). */}
+      <div className="grid grid-cols-4 gap-[14px] mb-6">
         <KPITile label="TRANSACTIONS"
                  value={stats ? String(stats.total_transactions) : "—"}
                  sub={`${stats?.buys ?? 0} buys · ${stats?.sells ?? 0} sells`}
                  extraSub={ytdSub}
-                 gradient="linear-gradient(135deg, #6366f1, #818cf8)" />
+                 gradient={ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15
+                   ? "linear-gradient(135deg, #dc2626, #ef4444)"
+                   : "linear-gradient(135deg, #6366f1, #818cf8)"} />
         <KPITile label="AVG / DAY"
                  value={stats ? stats.avg_per_day.toFixed(1) : "—"}
-                 sub="denominator = 5 Mon–Fri"
+                 sub="Mon–Fri denominator"
                  gradient="linear-gradient(135deg, #8b5cf6, #a78bfa)" />
         <KPITile label="UNIQUE TICKERS"
                  value={stats ? String(stats.unique_tickers) : "—"}
@@ -367,17 +413,8 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                  gradient="linear-gradient(135deg, #f59f00, #fbbf24)" />
         <KPITile label="NET REALIZED"
                  value={stats ? formatCurrency(stats.net_realized, { decimals: 0, showSign: true }) : "—"}
-                 sub="sells only, dollars"
+                 sub="sells only"
                  gradient={netRealizedGradient} />
-        <KPITile label="ACTIVITY"
-                 value={ytd?.current_vs_avg_pct != null
-                   ? `${ytd.current_vs_avg_pct > 0 ? "+" : ""}${ytd.current_vs_avg_pct.toFixed(0)}%`
-                   : "—"}
-                 sub={`vs YTD avg ${ytd?.avg_transactions != null ? ytd.avg_transactions.toFixed(1) : "—"}`}
-                 extraSub={ytd?.weeks_counted ? `${ytd.weeks_counted} prior weeks` : undefined}
-                 gradient={ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15
-                   ? "linear-gradient(135deg, #dc2626, #ef4444)"
-                   : "linear-gradient(135deg, #64748b, #94a3b8)"} />
       </div>
 
       {/* Weekly Notes card */}
@@ -389,12 +426,63 @@ export function WeeklyLedger({ navColor, initialWeek }: {
       {/* Transaction Ledger table */}
       <div className="rounded-[14px] overflow-hidden"
            style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        {/* Filter strip. Client-side filters against the fetched week
+            — no re-fetch on toggle. Day chips + Ticker dropdown; both
+            reset to "all" on week change. */}
+        <div className="flex items-center gap-3 flex-wrap px-[18px] py-3"
+             style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-2)" }}>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: "var(--ink-4)" }}>Day</span>
+          <div className="flex p-0.5 rounded-[8px] gap-0.5"
+               style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+            {(["all", "mon", "tue", "wed", "thu", "fri"] as const).map(k => (
+              <button key={k}
+                      onClick={() => setDayFilter(k)}
+                      data-testid={`wledger-day-${k}`}
+                      className="px-2.5 py-1 rounded text-[11px] font-medium transition-all"
+                      style={{
+                        background: dayFilter === k ? "var(--bg-2)" : "transparent",
+                        color: dayFilter === k ? "var(--ink)" : "var(--ink-4)",
+                        fontWeight: dayFilter === k ? 600 : 500,
+                      }}>
+                {k === "all" ? "All" : k === "thu" ? "Th" : k[0].toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] ml-2"
+                style={{ color: "var(--ink-4)" }}>Ticker</span>
+          <select value={tickerFilter}
+                  onChange={e => setTickerFilter(e.target.value)}
+                  data-testid="wledger-ticker-filter"
+                  className="h-[28px] px-2 rounded-[8px] text-[11px]"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--ink)",
+                    fontFamily: mono,
+                    minWidth: 100,
+                  }}>
+            <option value="all">All tickers</option>
+            {tickerOptions.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          {filterActive && (
+            <button onClick={() => { setDayFilter("all"); setTickerFilter("all"); }}
+                    className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
+                    style={{ color: "var(--ink-3)", background: "var(--surface)", border: "1px solid var(--border)" }}>
+              × Reset
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2 px-[18px] py-3"
              style={{ borderBottom: "1px solid var(--border)" }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
           <span className="text-[13px] font-semibold">Transactions</span>
           <span className="text-[11px] ml-2" style={{ color: "var(--ink-4)" }}>
-            {loading ? "loading…" : `${rows.length} rows`}
+            {loading ? "loading…" : filterActive
+              ? `${rows.length} of ${allRows.length} rows`
+              : `${rows.length} rows`}
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -440,7 +528,9 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                 <tr>
                   <td colSpan={12} className="px-3 py-8 text-center text-[12px]"
                       style={{ color: "var(--ink-4)" }}>
-                    No transactions this week. Enjoy the quiet.
+                    {filterActive
+                      ? "No transactions match the current filter."
+                      : "No transactions this week. Enjoy the quiet."}
                   </td>
                 </tr>
               ) : rows.map(r => (
