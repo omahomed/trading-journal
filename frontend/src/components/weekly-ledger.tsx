@@ -83,11 +83,15 @@ function fmtWeekRange(monday: string, friday: string): string {
 // tile — red when the operator is overactive (>15% above avg), green
 // when unusually quiet. Every other tile leaves the number ink-neutral.
 function QuietStatCard({
-  label, value, sub, sparkline, navColor, accent, valueTitle,
+  label, value, sub, extraSub, sparkline, navColor, accent, valueTitle,
 }: {
   label: string;
   value: string;
   sub: string;
+  /** Optional second line under `sub`. Used on the Compliance tile to
+   *  break out Buys% · Sells% alongside the overall ratio. Rendered in
+   *  the same 11px ink-3 style so it reads as continuation of `sub`. */
+  extraSub?: string;
   sparkline: { count: number; is_current: boolean }[];
   navColor: string;
   accent?: "warn" | "good" | null;
@@ -119,6 +123,12 @@ function QuietStatCard({
              style={{ color: "var(--ink-3)" }}>
           {sub}
         </div>
+        {extraSub && (
+          <div className="text-[11px] mt-0.5 privacy-mask"
+               style={{ color: "var(--ink-3)" }}>
+            {extraSub}
+          </div>
+        )}
       </div>
       {/* 5-week sparkline. SVG at fixed viewBox — width scales with the
           card. Bars are equal-width; heights normalized to max within the
@@ -497,6 +507,20 @@ export function WeeklyLedger({ navColor, initialWeek }: {
   const complianceSub = stats
     ? `${stats.compliant_count} of ${stats.graded_count} graded${stats.graded_count < stats.total_transactions ? ` · ${stats.total_transactions - stats.graded_count} pending` : ""}`
     : "no data";
+  // Buy/Sell breakdown line — entries and exits are separate skills.
+  // Each side is dashed out ("—") if no rows are graded on that side
+  // yet, so a mid-week check doesn't spuriously read 0%.
+  const complianceExtraSub = stats ? (() => {
+    const b = stats.buy_graded_count > 0
+      ? (stats.buy_compliance_pct != null
+          ? `${stats.buy_compliance_pct.toFixed(0)}%` : "—")
+      : "—";
+    const s = stats.sell_graded_count > 0
+      ? (stats.sell_compliance_pct != null
+          ? `${stats.sell_compliance_pct.toFixed(0)}%` : "—")
+      : "—";
+    return `Buys ${b} · Sells ${s}`;
+  })() : undefined;
   // Accent the number when compliance drops below 80% (broke process on
   // >1 in 5 decisions). Above 95% earns the green — a genuinely clean
   // week. Undecided middle stays neutral so accent means something.
@@ -582,6 +606,7 @@ export function WeeklyLedger({ navColor, initialWeek }: {
         <QuietStatCard label="COMPLIANCE"
                        value={complianceValue}
                        sub={complianceSub}
+                       extraSub={complianceExtraSub}
                        sparkline={complianceSparkline}
                        navColor={navColor}
                        accent={complianceAccent} />

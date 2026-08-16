@@ -10835,13 +10835,20 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 # Compliance stats — migration 070. Ungraded rows don't
                 # count in the denominator, so a fresh week starts at
                 # "0 of N graded" with no compliance % (renders "—")
-                # rather than silently 100% or 0%.
-                graded = sum(1 for r in ledger if r["compliant"] is not None)
-                compliant_yes = sum(1 for r in ledger if r["compliant"] is True)
-                compliance_pct = (
-                    round((compliant_yes / graded) * 100.0, 1)
-                    if graded > 0 else None
-                )
+                # rather than silently 100% or 0%. Split into
+                # buy/sell so the tile surfaces the two rates side-by-
+                # side — entries and exits are separate skills, one may
+                # be sharp while the other is sloppy.
+                def _compliance_over(rows: list) -> tuple[int, int, float | None]:
+                    g = sum(1 for r in rows if r["compliant"] is not None)
+                    y = sum(1 for r in rows if r["compliant"] is True)
+                    p = round((y / g) * 100.0, 1) if g > 0 else None
+                    return g, y, p
+                graded, compliant_yes, compliance_pct = _compliance_over(ledger)
+                buy_graded, buy_compliant, buy_pct = _compliance_over(
+                    [r for r in ledger if r["action"] == "BUY"])
+                sell_graded, sell_compliant, sell_pct = _compliance_over(
+                    [r for r in ledger if r["action"] == "SELL"])
                 stats = {
                     "total_transactions": total,
                     "buys": buys,
@@ -10852,6 +10859,12 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                     "graded_count": graded,
                     "compliant_count": compliant_yes,
                     "compliance_pct": compliance_pct,
+                    "buy_graded_count": buy_graded,
+                    "buy_compliant_count": buy_compliant,
+                    "buy_compliance_pct": buy_pct,
+                    "sell_graded_count": sell_graded,
+                    "sell_compliant_count": sell_compliant,
+                    "sell_compliance_pct": sell_pct,
                 }
 
                 # 3. YTD average benchmark. Weekly transaction count from

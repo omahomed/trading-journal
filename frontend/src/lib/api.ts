@@ -2395,10 +2395,18 @@ export interface WeeklyLedgerStats {
   net_realized: number;
   avg_per_day: number;
   /** Migration 070 — compliance stats. `compliance_pct` is null when
-   *  `graded_count === 0` (no basis for %); frontend renders "—". */
+   *  `graded_count === 0` (no basis for %); frontend renders "—".
+   *  Buy/Sell variants surface entry vs exit adherence separately —
+   *  one may be sharp while the other is sloppy. */
   graded_count: number;
   compliant_count: number;
   compliance_pct: number | null;
+  buy_graded_count: number;
+  buy_compliant_count: number;
+  buy_compliance_pct: number | null;
+  sell_graded_count: number;
+  sell_compliant_count: number;
+  sell_compliance_pct: number | null;
 }
 
 export interface WeeklyLedgerYtdAvg {

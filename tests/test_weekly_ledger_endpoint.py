@@ -381,6 +381,46 @@ def test_compliance_pct_null_when_no_graded_rows(ledger_client):
     assert stats["compliance_pct"] is None
 
 
+def test_compliance_split_buy_vs_sell(ledger_client):
+    """Buy compliance and sell compliance are computed independently:
+    entries and exits are separate skills. Overall pct is unchanged."""
+    ledger_client.state["ledger_rows"] = [
+        _row(detail_id=1, action="BUY", compliant=True),
+        _row(detail_id=2, action="BUY", compliant=True),
+        _row(detail_id=3, action="BUY", compliant=True),   # 3/3 buys
+        _row(detail_id=4, action="SELL", compliant=False),
+        _row(detail_id=5, action="SELL", compliant=False), # 0/2 sells
+        _row(detail_id=6, action="BUY",  compliant=None),  # ungraded
+    ]
+    stats = ledger_client.get("/api/weekly-ledger",
+                              params={"portfolio": "CanSlim",
+                                      "week_start": "2026-08-10"}).json()["stats"]
+    # Overall: 3 of 5 graded → 60%
+    assert stats["graded_count"] == 5
+    assert stats["compliance_pct"] == 60.0
+    # Buys: 3 of 3 → 100%
+    assert stats["buy_graded_count"] == 3
+    assert stats["buy_compliance_pct"] == 100.0
+    # Sells: 0 of 2 → 0%
+    assert stats["sell_graded_count"] == 2
+    assert stats["sell_compliance_pct"] == 0.0
+
+
+def test_compliance_split_null_side_when_no_graded_on_that_side(ledger_client):
+    """When one side has nothing graded, that side's pct is null so
+    the frontend can render '—' instead of a spurious 0%."""
+    ledger_client.state["ledger_rows"] = [
+        _row(action="BUY", compliant=True),
+        _row(action="SELL", compliant=None),   # sell ungraded
+    ]
+    stats = ledger_client.get("/api/weekly-ledger",
+                              params={"portfolio": "CanSlim",
+                                      "week_start": "2026-08-10"}).json()["stats"]
+    assert stats["buy_compliance_pct"] == 100.0
+    assert stats["sell_graded_count"] == 0
+    assert stats["sell_compliance_pct"] is None
+
+
 def test_patch_compliant_accepts_true_false_null(ledger_client):
     for target in [True, False, None]:
         ledger_client.state["compliant_patch_return"] = (7, target)
