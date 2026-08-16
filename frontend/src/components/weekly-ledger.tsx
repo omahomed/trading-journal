@@ -322,11 +322,19 @@ export function WeeklyLedger({ navColor, initialWeek }: {
     return `${sign}${ytd.current_vs_avg_pct.toFixed(0)}% ${arrow} vs YTD avg ${avg.toFixed(1)}`;
   }, [stats, ytd]);
 
-  const netRealizedGradient = stats
-    ? (stats.net_realized >= 0
-        ? "linear-gradient(135deg, #10b981, #34d399)"
-        : "linear-gradient(135deg, #dc2626, #ef4444)")
-    : "linear-gradient(135deg, #64748b, #94a3b8)";
+  // vs-YTD activity tile gradient. Turns red at >15% above the YTD avg
+  // (the "overactivity" cue) — otherwise a neutral slate. This is the
+  // same signal the Transactions tile's delta subline carries; the
+  // tile promotes it to a primary readout so the process-focused stat
+  // sits at the same weight as Transactions itself.
+  const ytdTileGradient = ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct > 15
+    ? "linear-gradient(135deg, #dc2626, #ef4444)"
+    : ytd?.current_vs_avg_pct != null && ytd.current_vs_avg_pct < -15
+      ? "linear-gradient(135deg, #10b981, #34d399)"
+      : "linear-gradient(135deg, #64748b, #94a3b8)";
+  const ytdTileValue = ytd?.current_vs_avg_pct != null
+    ? `${ytd.current_vs_avg_pct > 0 ? "+" : ""}${ytd.current_vs_avg_pct.toFixed(0)}%`
+    : "—";
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -390,11 +398,11 @@ export function WeeklyLedger({ navColor, initialWeek }: {
         </button>
       </div>
 
-      {/* KPI tiles — 4-across, single-line subs so text isn't crammed.
-          Prior 5-tile layout had a redundant "Activity" tile that
-          echoed the Transactions delta chip verbatim; consolidated
-          into a single tile whose gradient turns red at >15% over
-          YTD avg (the "overactivity" cue). */}
+      {/* KPI tiles — 4-across. Focus is process, not money: NET
+          REALIZED (dollars) was dropped because "good trade vs bad
+          trade" is decided by rules + process, not P&L. The delta
+          vs YTD avg — the actual overactivity signal — takes its
+          slot as its own primary tile instead of a subline. */}
       <div className="grid grid-cols-4 gap-[14px] mb-6">
         <KPITile label="TRANSACTIONS"
                  value={stats ? String(stats.total_transactions) : "—"}
@@ -411,10 +419,11 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                  value={stats ? String(stats.unique_tickers) : "—"}
                  sub="distinct symbols touched"
                  gradient="linear-gradient(135deg, #f59f00, #fbbf24)" />
-        <KPITile label="NET REALIZED"
-                 value={stats ? formatCurrency(stats.net_realized, { decimals: 0, showSign: true }) : "—"}
-                 sub="sells only"
-                 gradient={netRealizedGradient} />
+        <KPITile label="VS YTD AVG"
+                 value={ytdTileValue}
+                 sub={`YTD avg ${ytd?.avg_transactions != null ? ytd.avg_transactions.toFixed(1) : "—"}`}
+                 extraSub={ytd?.weeks_counted ? `${ytd.weeks_counted} prior weeks` : undefined}
+                 gradient={ytdTileGradient} />
       </div>
 
       {/* Weekly Notes card */}
