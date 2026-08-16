@@ -31,6 +31,7 @@ import {
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { TagPicker } from "./tag-picker";
+import { SearchSelect } from "./search-select";
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -507,22 +508,18 @@ export function WeeklyLedger({ navColor, initialWeek }: {
           </div>
           <span className="text-[10px] font-semibold uppercase tracking-[0.08em] ml-2"
                 style={{ color: "var(--ink-4)" }}>Ticker</span>
-          <select value={tickerFilter}
-                  onChange={e => setTickerFilter(e.target.value)}
-                  data-testid="wledger-ticker-filter"
-                  className="h-[28px] px-2 rounded-[8px] text-[11px]"
-                  style={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    color: "var(--ink)",
-                    fontFamily: mono,
-                    minWidth: 100,
-                  }}>
-            <option value="all">All tickers</option>
-            {tickerOptions.map(t => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+          {/* Uses the shared SearchSelect component that Log Buy / Log Sell /
+              Position Sizer use — type to filter, pick from the list. Empty
+              value means "all tickers"; the "All tickers" option leads the
+              list so it's always one keystroke away. */}
+          <div style={{ minWidth: 200 }} data-testid="wledger-ticker-filter">
+            <SearchSelect value={tickerFilter === "all" ? "" : tickerFilter}
+                          onChange={v => setTickerFilter(v || "all")}
+                          options={["", ...tickerOptions].map(t => ({
+                            value: t, label: t === "" ? "All tickers" : t,
+                          }))}
+                          placeholder="All tickers" />
+          </div>
           {filterActive && (
             <button onClick={() => { setDayFilter("all"); setTickerFilter("all"); }}
                     className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
@@ -553,9 +550,9 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                   { l: "Shares", a: "right" },
                   { l: "Price", a: "right" },
                   { l: "Amount", a: "right" },
+                  { l: "Realized", a: "right" },
                   { l: "Buy Rule", a: "left" },
                   { l: "Sell Rule", a: "left" },
-                  { l: "Realized", a: "right" },
                   { l: "Lesson", a: "left" },
                   { l: "Exit Notes", a: "left" },
                 ].map(c => (
@@ -631,11 +628,11 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                     <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
                       {r.amount != null ? formatCurrency(r.amount, { decimals: 0, showSign: true }) : "—"}
                     </td>
-                    <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.buy_rule || "—"}</td>
-                    <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.sell_rule || "—"}</td>
                     <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: r.realized_pl == null ? "var(--ink-4)" : r.realized_pl >= 0 ? "#08a86b" : "#e5484d" }}>
                       {r.realized_pl != null ? formatCurrency(r.realized_pl, { decimals: 0, showSign: true }) : "—"}
                     </td>
+                    <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.buy_rule || "—"}</td>
+                    <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{r.sell_rule || "—"}</td>
                     <td className="px-3 py-2" style={{ minWidth: 200 }}>
                       <TagPicker entityType="trades_details" entityId={r.detail_id} portfolio={portfolio} />
                     </td>
