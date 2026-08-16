@@ -114,7 +114,11 @@ function QuietStatCard({
         {label}
       </div>
       <div className="flex-1 flex flex-col">
-        <div className="text-[28px] font-semibold tracking-tight leading-none privacy-mask"
+        {/* Value size + weight bumped 2026-08-16: 28px semibold → 36px
+            bold. Prior sizing was calibrated for a 4-tile row (~330px
+            wide each); with 5 tiles at ~250px wide the primary number
+            was reading as ~11% of tile width and felt undersized. */}
+        <div className="text-[36px] font-bold tracking-tight leading-none privacy-mask"
              title={valueTitle}
              style={{ fontFamily: mono, color: valueColor }}>
           {value}
@@ -521,13 +525,14 @@ export function WeeklyLedger({ navColor, initialWeek }: {
       : "—";
     return `Buys ${b} · Sells ${s}`;
   })() : undefined;
-  // Accent the number when compliance drops below 80% (broke process on
-  // >1 in 5 decisions). Above 95% earns the green — a genuinely clean
-  // week. Undecided middle stays neutral so accent means something.
+  // Compliance color rule — tightened 2026-08-16:
+  //   Green ≥ 80%  (followed process at least 4 of 5 — genuinely good)
+  //   Red   < 50%  (broke process more than half — clear alarm)
+  //   50–80% neutral (in between, no color) — accent means something.
   const complianceAccent: "warn" | "good" | null =
     stats?.compliance_pct == null ? null
-    : stats.compliance_pct < 80 ? "warn"
-    : stats.compliance_pct >= 95 ? "good"
+    : stats.compliance_pct < 50 ? "warn"
+    : stats.compliance_pct >= 80 ? "good"
     : null;
 
   return (
