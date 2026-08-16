@@ -2790,7 +2790,7 @@ def weekly_retro_delete(retro_id: int, request: Request):
 # so the wire contract is stable regardless of frontend client.
 
 _TAG_VALID_COLORS = {"rose", "amber", "emerald", "sky", "violet"}
-_TAG_VALID_ENTITY_TYPES = {"weekly_retro", "daily_journal", "trades_summary"}
+_TAG_VALID_ENTITY_TYPES = {"weekly_retro", "daily_journal", "trades_summary", "trades_details"}
 _TAG_MAX_PER_ENTITY = 10
 
 
