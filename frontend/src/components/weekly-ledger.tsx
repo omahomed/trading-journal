@@ -88,10 +88,10 @@ function QuietStatCard({
   label: string;
   value: string;
   sub: string;
-  /** Optional second line under `sub`. Used on the Compliance tile to
-   *  break out Buys% · Sells% alongside the overall ratio. Rendered in
-   *  the same 11px ink-3 style so it reads as continuation of `sub`. */
-  extraSub?: string;
+  /** Optional second line under `sub`. Widened to ReactNode so callers
+   *  can inline color-coded spans (e.g. per-side compliance %s on the
+   *  Compliance tile). Plain strings still render as before. */
+  extraSub?: React.ReactNode;
   sparkline: { count: number; is_current: boolean }[];
   navColor: string;
   accent?: "warn" | "good" | null;
@@ -512,18 +512,29 @@ export function WeeklyLedger({ navColor, initialWeek }: {
     ? `${stats.compliant_count} of ${stats.graded_count} graded${stats.graded_count < stats.total_transactions ? ` · ${stats.total_transactions - stats.graded_count} pending` : ""}`
     : "no data";
   // Buy/Sell breakdown line — entries and exits are separate skills.
-  // Each side is dashed out ("—") if no rows are graded on that side
-  // yet, so a mid-week check doesn't spuriously read 0%.
+  // Each side inline-colored under the SAME thresholds the primary
+  // Compliance number uses (green ≥80, red <50, neutral otherwise) so
+  // a lopsided week — "Buys 90% good, Sells 23% alarm" — reads at a
+  // glance instead of being buried in a monochrome subline. Undashed
+  // side ("—") when nothing is graded there yet.
+  const sideColor = (pct: number | null): string =>
+    pct == null ? "var(--ink-3)"
+    : pct >= 80 ? "#08a86b"
+    : pct < 50 ? "#e5484d"
+    : "var(--ink-3)";
   const complianceExtraSub = stats ? (() => {
-    const b = stats.buy_graded_count > 0
-      ? (stats.buy_compliance_pct != null
-          ? `${stats.buy_compliance_pct.toFixed(0)}%` : "—")
-      : "—";
-    const s = stats.sell_graded_count > 0
-      ? (stats.sell_compliance_pct != null
-          ? `${stats.sell_compliance_pct.toFixed(0)}%` : "—")
-      : "—";
-    return `Buys ${b} · Sells ${s}`;
+    const renderSide = (graded: number, pct: number | null) => {
+      if (graded === 0) return <span style={{ color: "var(--ink-3)" }}>—</span>;
+      if (pct == null) return <span style={{ color: "var(--ink-3)" }}>—</span>;
+      return <span style={{ color: sideColor(pct), fontWeight: 600 }}>{pct.toFixed(0)}%</span>;
+    };
+    return (
+      <span>
+        Buys {renderSide(stats.buy_graded_count, stats.buy_compliance_pct)}
+        {" · "}
+        Sells {renderSide(stats.sell_graded_count, stats.sell_compliance_pct)}
+      </span>
+    );
   })() : undefined;
   // Compliance color rule — tightened 2026-08-16:
   //   Green ≥ 80%  (followed process at least 4 of 5 — genuinely good)
