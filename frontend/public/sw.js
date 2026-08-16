@@ -20,8 +20,17 @@
 // to returning users by the (also-removed) cache-first navigation
 // strategy. The bump forces activate-time eviction of v1 so users
 // returning with stale entries don't keep seeing them.
-const SHELL_CACHE_NAME = "mo-shell-v2";
-const RUNTIME_CACHE_NAME = "mo-runtime-v2";
+//
+// v2 → v3 (2026-08-16): Weekly Ledger visual updates were shipping to
+// Vercel but returning users kept seeing prior bundles. Root cause:
+// cache-first for static assets was serving the previous build's JS
+// chunk hashes even after the HTML network-first path fetched new
+// HTML. Bumping the cache name forces a full runtime-cache eviction
+// on activate so stale chunk caches drop. Cache-first is retained for
+// per-build immutable chunks (correct behavior); the eviction just
+// makes sure "the current build's chunks" wins over "any old chunk".
+const SHELL_CACHE_NAME = "mo-shell-v3";
+const RUNTIME_CACHE_NAME = "mo-runtime-v3";
 
 // Static PWA assets that the install flow needs offline. Navigation
 // HTML routes are deliberately NOT precached — those are now served
