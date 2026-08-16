@@ -338,6 +338,20 @@ export function WeeklyLedger({ navColor, initialWeek }: {
   // table + a small filtered-count badge reflect the current filter.
   const [dayFilter, setDayFilter] = useState<"all" | "mon" | "tue" | "wed" | "thu" | "fri">("all");
   const [tickerFilter, setTickerFilter] = useState<string>("all");
+  // Sort state — click any header to sort by that key; click again to
+  // reverse. Default: chronological (date asc) — matches the pre-sort
+  // implicit order so the initial render is stable.
+  type SortKey = "date" | "ticker" | "trx_id" | "action" | "shares"
+               | "price" | "amount" | "realized_pl" | "compliant"
+               | "buy_rule" | "sell_rule";
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "date", dir: "asc",
+  });
+  const toggleSort = useCallback((key: SortKey) => {
+    setSort(prev => prev.key === key
+      ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: "asc" });
+  }, []);
 
   const portfolio = getActivePortfolio();
 
@@ -413,6 +427,36 @@ export function WeeklyLedger({ navColor, initialWeek }: {
   }, [allRows, dayFilter, tickerFilter]);
 
   const filterActive = dayFilter !== "all" || tickerFilter !== "all";
+
+  // Sort AFTER filter. Nulls sort LAST regardless of asc/desc so unset
+  // fields (empty Realized on BUY rows, ungraded compliant chips, missing
+  // Buy/Sell Rule) always land at the bottom of the sorted view — a
+  // sorted table shouldn't hide the interesting rows behind a wall of
+  // "—". Compliant is normalized to a number for ordering: true = 2,
+  // false = 1, null = null → nulls last.
+  const sortedRows = useMemo(() => {
+    const arr = [...rows];
+    const { key, dir } = sort;
+    const mul = dir === "asc" ? 1 : -1;
+    const complianceRank = (v: boolean | null): number | null =>
+      v === true ? 2 : v === false ? 1 : null;
+    arr.sort((a, b) => {
+      let av: unknown = a[key];
+      let bv: unknown = b[key];
+      if (key === "compliant") {
+        av = complianceRank(a.compliant);
+        bv = complianceRank(b.compliant);
+      }
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;   // nulls last regardless of direction
+      if (bv == null) return -1;
+      if (typeof av === "number" && typeof bv === "number") {
+        return (av - bv) * mul;
+      }
+      return String(av).localeCompare(String(bv)) * mul;
+    });
+    return arr;
+  }, [rows, sort]);
 
   // ── YTD delta chip subline for the Transactions KPI ─────────────
   const ytdSub = useMemo(() => {
@@ -628,32 +672,37 @@ export function WeeklyLedger({ navColor, initialWeek }: {
           <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {[
-                  { l: "Date", a: "left" },
-                  { l: "Ticker", a: "left" },
-                  { l: "Trx", a: "left" },
-                  { l: "Side", a: "left" },
-                  { l: "Shares", a: "right" },
-                  { l: "Price", a: "right" },
-                  { l: "Amount", a: "right" },
-                  { l: "Realized", a: "right" },
-                  { l: "OK?", a: "center" },
-                  { l: "Buy Rule", a: "left" },
-                  { l: "Sell Rule", a: "left" },
-                  { l: "Lesson", a: "left" },
-                  { l: "Exit Notes", a: "left" },
-                ].map(c => (
-                  <th key={c.l}
-                      className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.04em] select-none"
-                      style={{
-                        color: "var(--ink-4)",
-                        borderBottom: "1px solid var(--border)",
-                        textAlign: c.a as "left" | "right" | "center",
-                        whiteSpace: "nowrap",
-                      }}>
-                    {c.l}
-                  </th>
-                ))}
+                {([
+                  { l: "Date", a: "left", k: "date" },
+                  { l: "Ticker", a: "left", k: "ticker" },
+                  { l: "Trx", a: "left", k: "trx_id" },
+                  { l: "Side", a: "left", k: "action" },
+                  { l: "Shares", a: "right", k: "shares" },
+                  { l: "Price", a: "right", k: "price" },
+                  { l: "Amount", a: "right", k: "amount" },
+                  { l: "Realized", a: "right", k: "realized_pl" },
+                  { l: "OK?", a: "center", k: "compliant" },
+                  { l: "Buy Rule", a: "left", k: "buy_rule" },
+                  { l: "Sell Rule", a: "left", k: "sell_rule" },
+                  { l: "Lesson", a: "left", k: null },       // TagPicker — no sort
+                  { l: "Exit Notes", a: "left", k: null },   // free text — no sort
+                ] as { l: string; a: "left" | "right" | "center"; k: SortKey | null }[]).map(c => {
+                  const active = c.k !== null && sort.key === c.k;
+                  return (
+                    <th key={c.l}
+                        onClick={c.k ? () => toggleSort(c.k as SortKey) : undefined}
+                        className={"px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.04em] select-none"
+                          + (c.k ? " cursor-pointer" : "")}
+                        style={{
+                          color: active ? "var(--ink-2)" : "var(--ink-4)",
+                          borderBottom: "1px solid var(--border)",
+                          textAlign: c.a,
+                          whiteSpace: "nowrap",
+                        }}>
+                      {c.l}{active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -673,7 +722,7 @@ export function WeeklyLedger({ navColor, initialWeek }: {
                       : "No transactions this week. Enjoy the quiet."}
                   </td>
                 </tr>
-              ) : rows.map(r => (
+              ) : sortedRows.map(r => (
                 <Fragment key={r.detail_id}>
                   <tr onContextMenu={e => {
                         e.preventDefault();
