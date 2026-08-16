@@ -10720,6 +10720,10 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 # 1. Ledger rows (details JOINED to campaign for buy_rule /
                 # sell_rule / status). ORDER BY date ASC, id ASC so trims
                 # sort after their buys on the same day.
+                # td.date is `timestamp without time zone`, so a naive
+                # `td.date <= 'YYYY-MM-DD'` compares against midnight of
+                # that day and silently drops every intra-day fill on
+                # Friday. Cast to ::date so the range is day-precision.
                 cur.execute(
                     """
                     SELECT td.id, td.trade_id, td.ticker, td.action, td.trx_id,
@@ -10733,8 +10737,8 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                             AND ts.portfolio_id = td.portfolio_id
                             AND ts.deleted_at IS NULL
                      WHERE td.portfolio_id = %s
-                       AND td.date >= %s
-                       AND td.date <= %s
+                       AND td.date::date >= %s
+                       AND td.date::date <= %s
                        AND td.deleted_at IS NULL
                      ORDER BY td.date ASC, td.id ASC
                     """,
@@ -10803,16 +10807,19 @@ def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
                 last_complete_friday = (
                     _dt.strptime(monday, "%Y-%m-%d").date()
                     - timedelta(days=3)).isoformat()  # prior Friday
+                # Same ::date cast as the ledger query above — otherwise
+                # end-of-day fills on the boundary week fall out of the
+                # YTD-avg denominator.
                 cur.execute(
                     """
-                    SELECT date_trunc('week', td.date)::date AS week,
+                    SELECT date_trunc('week', td.date::date)::date AS week,
                            COUNT(*) AS n
                       FROM trades_details td
                      WHERE td.portfolio_id = %s
-                       AND td.date >= %s
-                       AND td.date <= %s
+                       AND td.date::date >= %s
+                       AND td.date::date <= %s
                        AND td.deleted_at IS NULL
-                       AND EXTRACT(isodow FROM td.date) BETWEEN 1 AND 5
+                       AND EXTRACT(isodow FROM td.date::date) BETWEEN 1 AND 5
                      GROUP BY week
                     """,
                     (portfolio_id, year_start, last_complete_friday),
