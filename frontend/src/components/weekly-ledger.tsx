@@ -149,11 +149,18 @@ function QuietStatCard({
 //    click. Optimistic update with revert-on-error. Uses the PATCH
 //    endpoint so the change persists per detail row.
 function ComplianceChip({ detailId, initial, onChange }: {
-  detailId: number; initial: boolean | null; onChange: (v: boolean | null) => void;
+  detailId: number;
+  // Accept undefined defensively — during mid-deploy the backend may
+  // return rows without the compliant field. Normalize to null so
+  // the state stays boolean|null everywhere else.
+  initial: boolean | null | undefined;
+  onChange: (v: boolean | null) => void;
 }) {
-  const [value, setValue] = useState<boolean | null>(initial);
+  const norm = (v: boolean | null | undefined): boolean | null =>
+    v === true ? true : v === false ? false : null;
+  const [value, setValue] = useState<boolean | null>(norm(initial));
   const [saving, setSaving] = useState(false);
-  useEffect(() => { setValue(initial); }, [initial, detailId]);
+  useEffect(() => { setValue(norm(initial)); }, [initial, detailId]);
 
   const next = (v: boolean | null): boolean | null =>
     v === null ? true : v === true ? false : null;
