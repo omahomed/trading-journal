@@ -29,7 +29,7 @@ import { usePopover } from "@/lib/use-popover";
 
 const MAX_TAGS_PER_ENTITY = 10;
 
-type EntityType = "weekly_retro" | "daily_journal" | "trades_summary";
+type EntityType = "weekly_retro" | "daily_journal" | "trades_summary" | "trades_details";
 
 interface TagPickerProps {
   entityType: EntityType;

@@ -491,7 +491,7 @@ export interface TagAssignment {
   tag_id: number;
   tag_name: string;
   tag_color: string;
-  entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+  entity_type: "weekly_retro" | "daily_journal" | "trades_summary" | "trades_details";
   entity_id: number;
   created_at: string;
 }
@@ -1206,7 +1206,7 @@ export const api = {
     }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
 
   listTagAssignments: (query: {
-    entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+    entity_type: "weekly_retro" | "daily_journal" | "trades_summary" | "trades_details";
     entity_id: number;
   }) =>
     fetchJSON<TagAssignment[]>(
@@ -1215,7 +1215,7 @@ export const api = {
 
   createTagAssignment: (payload: {
     tag_id: number;
-    entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+    entity_type: "weekly_retro" | "daily_journal" | "trades_summary" | "trades_details";
     entity_id: number;
   }) =>
     fetchWithAuth(`${API_BASE}/api/tags/assignments`, {
@@ -1715,6 +1715,33 @@ export const api = {
     fetchJSON<RiskLevelsResponse | { error: string }>(
       `/api/risk/levels?portfolio=${encodeURIComponent(portfolio)}`,
     ),
+
+  // Weekly Ledger (migration 069) — per-week transaction review page.
+  // Backend composes every BUY + SELL detail row for the given Mon–Fri
+  // week, plus stats + YTD-avg benchmark + page-level weekly note.
+  weeklyLedger: (portfolio: string, weekStart: string) =>
+    fetchJSON<WeeklyLedgerResponse | { error: string }>(
+      `/api/weekly-ledger?portfolio=${encodeURIComponent(portfolio)}&week_start=${weekStart}`,
+    ),
+
+  putWeeklyLedgerNote: (payload: { portfolio: string; week_start: string; note: string }) =>
+    fetchWithAuth(`${API_BASE}/api/weekly-ledger/notes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()) as Promise<
+      { id: number; portfolio: string; week_start: string; note: string; updated_at: string | null }
+      | { error: string }
+    >,
+
+  patchTradeDetailRetroNotes: (detailId: number, notes: string) =>
+    fetchWithAuth(`${API_BASE}/api/trades/details/${detailId}/retro-notes`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ retro_notes: notes }),
+    }).then(r => r.json()) as Promise<
+      { id: number; retro_notes: string } | { error: string }
+    >,
 
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
@@ -2323,6 +2350,54 @@ export interface CycleReferenceRow {
   is_frozen: boolean;
   frozen_at_date: string | null;
   l1_threshold_nlv: number | null;   // ratcheted_nlv × 0.925
+}
+
+// Weekly Ledger (migration 069) — per-week transaction review response.
+// One row per BUY/SELL detail in the Mon–Fri week + stats + YTD benchmark
+// + page-level free-text note. See GET /api/weekly-ledger for the contract.
+export interface WeeklyLedgerRow {
+  detail_id: number;
+  trade_id: string;
+  ticker: string;
+  action: "BUY" | "SELL";
+  trx_id: string | null;
+  date: string | null;
+  shares: number;
+  price: number | null;
+  amount: number | null;
+  row_rule: string | null;
+  realized_pl: number | null;
+  retro_notes: string;
+  instrument_type: "STOCK" | "OPTION";
+  multiplier: number;
+  buy_rule: string | null;
+  sell_rule: string | null;
+  campaign_status: "OPEN" | "CLOSED" | null;
+}
+
+export interface WeeklyLedgerStats {
+  total_transactions: number;
+  buys: number;
+  sells: number;
+  unique_tickers: number;
+  net_realized: number;
+  avg_per_day: number;
+}
+
+export interface WeeklyLedgerYtdAvg {
+  weeks_counted: number;
+  avg_transactions: number | null;
+  current_vs_avg_pct: number | null;
+}
+
+export interface WeeklyLedgerResponse {
+  portfolio: string;
+  week_start: string;   // ISO Monday
+  week_end: string;     // ISO Friday
+  note: string;
+  rows: WeeklyLedgerRow[];
+  stats: WeeklyLedgerStats;
+  ytd_avg: WeeklyLedgerYtdAvg;
 }
 
 export interface RiskLevelsResponse {

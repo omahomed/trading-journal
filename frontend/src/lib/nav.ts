@@ -86,6 +86,7 @@ export const NAV: NavGroup[] = [
       { id: "djournal", label: "Daily Journal", href: "/daily-journal" },
       { id: "jlog", label: "Journal Log", href: "/journal-log" },
       { id: "nlventry", label: "NLV Entry", href: "/nlv-entry" },
+      { id: "wledger", label: "Weekly Ledger", href: "/weekly-ledger" },
       { id: "retro", label: "Weekly Retro", href: "/weekly-retro" },
     ],
   },

@@ -4370,7 +4370,7 @@ def soft_delete_weekly_retro_snapshot(snapshot_id: int) -> bool:
 # {"error": "invalid_color"} so the frontend's TAG_PALETTE fallback never
 # silently maps an unknown tone to sky.
 _TAG_COLOR_VOCAB = ("rose", "amber", "emerald", "sky", "violet")
-_TAG_ENTITY_TYPES = ("weekly_retro", "daily_journal", "trades_summary")
+_TAG_ENTITY_TYPES = ("weekly_retro", "daily_journal", "trades_summary", "trades_details")
 
 
 def _serialize_tag(row: dict) -> dict:

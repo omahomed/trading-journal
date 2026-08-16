@@ -10648,6 +10648,298 @@ def slices_remove_holding(request: Request, holding_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Weekly Ledger — migration 069.
+#
+# Per-week transaction review page. Lists every BUY + SELL detail row that
+# landed Mon–Fri of the selected week, one row per transaction (adds,
+# partial trims, full closes all included). Distinct from Weekly Retro
+# (prose/reflection) and Campaign Review (aggregates details into one
+# campaign row).
+#
+# Composed response includes stats + YTD average benchmark so the operator
+# can gauge overactivity ("this week vs YTD avg"). Weekly notes are
+# page-level free-text scoped to (user, portfolio, week_start).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _monday_of(day_iso: str) -> str:
+    """Snap a YYYY-MM-DD to the Monday of that ISO week. Idempotent —
+    Monday snaps to itself. Rejects malformed input by letting the ValueError
+    propagate to the caller for a 422."""
+    from datetime import datetime as _dt, timedelta
+    d = _dt.strptime(day_iso.strip()[:10], "%Y-%m-%d").date()
+    monday = d - timedelta(days=d.weekday())  # weekday(): Mon=0 .. Sun=6
+    return monday.isoformat()
+
+
+def _friday_of(monday_iso: str) -> str:
+    """Friday of the same ISO week as a Monday date."""
+    from datetime import datetime as _dt, timedelta
+    d = _dt.strptime(monday_iso.strip()[:10], "%Y-%m-%d").date()
+    return (d + timedelta(days=4)).isoformat()
+
+
+@app.get("/api/weekly-ledger")
+@limiter.limit("30/minute")
+def get_weekly_ledger(portfolio: str, week_start: str, request: Request):
+    """Composed Weekly Ledger read view.
+
+    Returns every BUY + SELL detail row for the given portfolio that landed
+    Mon–Fri of the ISO week containing `week_start`, plus:
+      * stats  — total transactions, buys/sells split, unique tickers,
+                 net realized, avg per day (denominator = 5 Mon–Fri)
+      * ytd_avg — average weekly transaction count from Jan 1 through
+                 last COMPLETE week (excludes the in-progress week so
+                 the average doesn't drag when checked mid-week). The
+                 `current_vs_avg_pct` field is a signed % delta of
+                 this week's count vs the YTD avg.
+      * note   — the page-level free-text note for this (user, portfolio,
+                 week_start). Empty string when no note has been saved.
+
+    Every date column on trades_details is Postgres DATE — no timezone
+    parsing. Portfolio scoping: portfolios.name lookup (RLS handles user
+    scoping); 404 when the portfolio doesn't exist for the caller.
+    """
+    try:
+        try:
+            monday = _monday_of(week_start)
+        except (ValueError, AttributeError):
+            return JSONResponse(status_code=422, content={
+                "error": "week_start must be YYYY-MM-DD"})
+        friday = _friday_of(monday)
+
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["name"] == portfolio), None)
+        if match is None:
+            return JSONResponse(status_code=404, content={
+                "error": f"Portfolio '{portfolio}' not found"})
+        portfolio_id = match["id"]
+
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # 1. Ledger rows (details JOINED to campaign for buy_rule /
+                # sell_rule / status). ORDER BY date ASC, id ASC so trims
+                # sort after their buys on the same day.
+                cur.execute(
+                    """
+                    SELECT td.id, td.trade_id, td.ticker, td.action, td.trx_id,
+                           td.date::date, td.shares, td.amount, td.value,
+                           td.rule AS row_rule, td.realized_pl, td.retro_notes,
+                           td.instrument_type, td.multiplier,
+                           ts.rule AS buy_rule, ts.sell_rule, ts.status
+                      FROM trades_details td
+                      LEFT JOIN trades_summary ts
+                             ON ts.trade_id = td.trade_id
+                            AND ts.portfolio_id = td.portfolio_id
+                            AND ts.deleted_at IS NULL
+                     WHERE td.portfolio_id = %s
+                       AND td.date >= %s
+                       AND td.date <= %s
+                       AND td.deleted_at IS NULL
+                     ORDER BY td.date ASC, td.id ASC
+                    """,
+                    (portfolio_id, monday, friday),
+                )
+                ledger = []
+                for r in cur.fetchall():
+                    (detail_id, trade_id, ticker, action, trx_id, date_d,
+                     shares, amount, value, row_rule, realized_pl, retro_notes,
+                     instrument_type, multiplier, buy_rule, sell_rule,
+                     campaign_status) = r
+                    # Per-row price: value / shares if both known; falls
+                    # back to amount / shares. Floats OK — display only.
+                    shares_f = float(shares or 0)
+                    price = None
+                    if shares_f > 0 and value is not None:
+                        price = round(float(value) / shares_f, 4)
+                    elif shares_f > 0 and amount is not None:
+                        price = round(abs(float(amount)) / shares_f, 4)
+                    ledger.append({
+                        "detail_id": detail_id,
+                        "trade_id": trade_id,
+                        "ticker": ticker,
+                        "action": (action or "").upper(),
+                        "trx_id": trx_id,
+                        "date": date_d.isoformat() if date_d else None,
+                        "shares": shares_f,
+                        "price": price,
+                        "amount": float(amount) if amount is not None else None,
+                        "row_rule": row_rule,
+                        "realized_pl": (
+                            float(realized_pl) if realized_pl is not None else None),
+                        "retro_notes": retro_notes or "",
+                        "instrument_type": instrument_type or "STOCK",
+                        "multiplier": float(multiplier or 1),
+                        "buy_rule": buy_rule,
+                        "sell_rule": sell_rule,
+                        "campaign_status": campaign_status,
+                    })
+
+                # 2. Stats. Buys/sells split, unique tickers, net realized
+                # (sum over SELLs only — realized_pl on BUY rows is null/0).
+                buys = sum(1 for r in ledger if r["action"] == "BUY")
+                sells = sum(1 for r in ledger if r["action"] == "SELL")
+                tickers = {r["ticker"] for r in ledger if r["ticker"]}
+                net_realized = sum(
+                    r["realized_pl"] for r in ledger
+                    if r["action"] == "SELL" and r["realized_pl"] is not None
+                )
+                total = len(ledger)
+                stats = {
+                    "total_transactions": total,
+                    "buys": buys,
+                    "sells": sells,
+                    "unique_tickers": len(tickers),
+                    "net_realized": round(net_realized, 2),
+                    "avg_per_day": round(total / 5.0, 2),
+                }
+
+                # 3. YTD average benchmark. Weekly transaction count from
+                # Jan 1 → the Sunday BEFORE the current week's Monday
+                # (i.e. every complete Mon–Fri week that has ended). Uses
+                # date_trunc('week') which is Monday-anchored in PG.
+                from datetime import datetime as _dt, timedelta
+                year_start = f"{_dt.strptime(monday, '%Y-%m-%d').year}-01-01"
+                last_complete_friday = (
+                    _dt.strptime(monday, "%Y-%m-%d").date()
+                    - timedelta(days=3)).isoformat()  # prior Friday
+                cur.execute(
+                    """
+                    SELECT date_trunc('week', td.date)::date AS week,
+                           COUNT(*) AS n
+                      FROM trades_details td
+                     WHERE td.portfolio_id = %s
+                       AND td.date >= %s
+                       AND td.date <= %s
+                       AND td.deleted_at IS NULL
+                       AND EXTRACT(isodow FROM td.date) BETWEEN 1 AND 5
+                     GROUP BY week
+                    """,
+                    (portfolio_id, year_start, last_complete_friday),
+                )
+                weekly_counts = [int(r[1]) for r in cur.fetchall()]
+                if weekly_counts:
+                    avg_txns = sum(weekly_counts) / len(weekly_counts)
+                    delta_pct = (
+                        ((total - avg_txns) / avg_txns) * 100.0
+                        if avg_txns > 0 else None
+                    )
+                else:
+                    avg_txns = None
+                    delta_pct = None
+                ytd_avg = {
+                    "weeks_counted": len(weekly_counts),
+                    "avg_transactions": (
+                        round(avg_txns, 2) if avg_txns is not None else None),
+                    "current_vs_avg_pct": (
+                        round(delta_pct, 1) if delta_pct is not None else None),
+                }
+
+                # 4. Weekly note. Empty string when unset — never null so
+                # the frontend's autosave input can bind directly.
+                cur.execute(
+                    """
+                    SELECT note
+                      FROM weekly_ledger_notes
+                     WHERE portfolio_id = %s AND week_start = %s
+                    """,
+                    (portfolio_id, monday),
+                )
+                note_row = cur.fetchone()
+                note = (note_row[0] if note_row else "") or ""
+
+        return {
+            "portfolio": portfolio,
+            "week_start": monday,
+            "week_end": friday,
+            "note": note,
+            "rows": ledger,
+            "stats": stats,
+            "ytd_avg": ytd_avg,
+        }
+    except Exception as e:
+        print(f"[weekly_ledger] handler failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.put("/api/weekly-ledger/notes")
+def put_weekly_ledger_note(body: dict = Body(...)):
+    """Upsert the page-level weekly note for (portfolio, week_start).
+    Body: {portfolio, week_start (YYYY-MM-DD; snapped to Monday), note}."""
+    try:
+        portfolio = str(body.get("portfolio") or "").strip()
+        week_start_raw = str(body.get("week_start") or "").strip()
+        note = str(body.get("note") or "")
+        if not portfolio:
+            return JSONResponse(status_code=422, content={
+                "error": "portfolio is required"})
+        try:
+            monday = _monday_of(week_start_raw)
+        except (ValueError, AttributeError):
+            return JSONResponse(status_code=422, content={
+                "error": "week_start must be YYYY-MM-DD"})
+
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["name"] == portfolio), None)
+        if match is None:
+            return JSONResponse(status_code=404, content={
+                "error": f"Portfolio '{portfolio}' not found"})
+        portfolio_id = match["id"]
+
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO weekly_ledger_notes
+                        (portfolio_id, week_start, note)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, portfolio_id, week_start)
+                    DO UPDATE SET note = EXCLUDED.note
+                    RETURNING id, week_start::text, note, updated_at
+                    """,
+                    (portfolio_id, monday, note),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        return {
+            "id": row[0], "portfolio": portfolio, "week_start": row[1],
+            "note": row[2], "updated_at": row[3].isoformat() if row[3] else None,
+        }
+    except Exception as e:
+        print(f"[put_weekly_ledger_note] failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.patch("/api/trades/details/{detail_id}/retro-notes")
+def patch_trade_detail_retro_notes(detail_id: int, body: dict = Body(...)):
+    """Inline edit for a single trade_detail row's retro_notes field.
+    Body: {retro_notes: str}. Empty string is a valid write (clears the
+    note). RLS scopes by user; a caller trying to edit another user's
+    row hits 0 rows updated → 404."""
+    try:
+        text = str(body.get("retro_notes") or "")
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE trades_details
+                       SET retro_notes = %s
+                     WHERE id = %s AND deleted_at IS NULL
+                    RETURNING id, retro_notes
+                    """,
+                    (text, detail_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return JSONResponse(status_code=404, content={
+                        "error": "trade_detail not found"})
+                conn.commit()
+        return {"id": row[0], "retro_notes": row[1] or ""}
+    except Exception as e:
+        print(f"[patch_trade_detail_retro_notes] {detail_id}: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
